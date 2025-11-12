@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "mfa": { "type": "object", "properties": {
+      "total_users": {"type": "integer"},
+      "enabled_users": {"type": "integer"},
+      "coverage_pct": {"type": "number"}
+    }, "required": ["total_users","enabled_users","coverage_pct"]},
+    "auth_failures": { "type": "object", "properties": {
+      "total": {"type": "integer"},
+      "top_ips": { "type": "array", "items": {"type": "object", "properties": {
+        "ip": {"type": "string"}, "count": {"type": "integer"}
+      }, "required": ["ip","count"]}}
+    }, "required": ["total","top_ips"]},
+    "admins": { "type": "object", "properties": {
+      "count": {"type": "integer"},
+      "with_mfa": {"type": "integer"},
+      "last_review_date": {"type": "string"}
+    }, "required": ["count","with_mfa","last_review_date"]},
+    "exceptions": { "type": "array", "items": { "type": "object", "properties": {
+        "type": {"type":"string"}, "entity":{"type":"string"}, "count":{"type":"integer"}
+    }, "required": ["type","entity","count"]}}
+  },
+  "required": ["mfa","auth_failures","admins","exceptions"]
+}

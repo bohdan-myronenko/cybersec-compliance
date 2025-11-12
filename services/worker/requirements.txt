@@ -1,0 +1,11 @@
+python-dotenv
+requests
+numpy
+faiss-cpu
+tqdm
+pypdf
+polars
+duckdb
+jinja2
+uvicorn[standard]
+fastapi

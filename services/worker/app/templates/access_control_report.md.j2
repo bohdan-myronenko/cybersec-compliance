@@ -1,0 +1,20 @@
+# Access Control Compliance Summary
+
+**Scope:** Access control (authentication, MFA, privileged access)  
+**Period:** {{ period }}
+
+## Key Metrics
+- MFA coverage: {{ metrics.mfa.coverage_pct }}% ({{ metrics.mfa.enabled_users }}/{{ metrics.mfa.total_users }}) [NIS2-21.2.i]
+- Admin accounts: {{ metrics.admins.with_mfa }}/{{ metrics.admins.count }} with MFA; last review: {{ metrics.admins.last_review_date }} [ISO27001-A.9]
+- Authentication failures: {{ metrics.auth_failures.total }} total; top IPs: {% for ip in metrics.auth_failures.top_ips[:5] %}{{ ip.ip }} ({{ ip.count }}){% if not loop.last %}, {% endif %}{% endfor %}
+
+## Notable Exceptions
+{% for ex in metrics.exceptions %}
+- {{ ex.type }} — {{ ex.entity }} ({{ ex.count }}) [NIS2-21.2.i]
+{% endfor %}
+
+## Observations
+{{ observations }}
+
+## Legal Context Provided
+- {{ legal_refs|join(", ") }}

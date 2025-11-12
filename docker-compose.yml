@@ -1,0 +1,58 @@
+networks:
+  public:
+    driver: bridge
+  private:
+    driver: bridge
+
+services:
+  api:
+    build: ./services/api
+    container_name: api
+    env_file: .env
+    ports:
+      - "8080:8080"
+    networks:
+      - public
+      - private
+    environment:
+      WORKER_URL: http://worker:8081
+    depends_on:
+      - worker
+      - ollama
+    volumes:
+      - ./warehouse:/app/warehouse
+      - ./kb:/app/kb:ro
+      - ./index:/app/index
+      - ./out:/app/out
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+  worker:
+    build: ./services/worker
+    container_name: compliance_worker
+    env_file: .env
+    networks:
+      - private
+    expose:
+      - "8081"
+    depends_on:
+      - ollama
+    volumes:
+      - ./warehouse:/app/warehouse
+      - ./kb:/app/kb:ro
+      - ./index:/app/index
+      - ./out:/out:rw
+      - ./data:/data:ro
+    command: ["python", "-m", "app.run_worker"]
+    
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    networks:
+      - private
+    expose:
+      - "11434"
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  ollama: {}
