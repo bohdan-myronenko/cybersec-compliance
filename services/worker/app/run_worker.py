@@ -1,11 +1,11 @@
 import os
 from pathlib import Path
+
 from fastapi import FastAPI
 import uvicorn
-import polars as pl
 import traceback
 
-from .pipeline import normalize_file, build_metrics, generate_report
+from .pipeline import build_windowed_metrics_for_dir, generate_report
 
 app = FastAPI(title="Compliance Worker", version="0.1.0")
 
@@ -22,27 +22,32 @@ def health():
 @app.post("/run/access-control")
 def run_access_control():
     try:
-        # Combine all files in DATA_DIR into one DataFrame
-        frames = []
-        for p in DATA_DIR.rglob("*"):
-            if p.is_file():
-                try:
-                    frames.append(normalize_file(p))
-                except Exception:
-                    # non-parsable file -> skip
-                    continue
+        window_days = int(os.getenv("WINDOW_DAYS", "7"))
 
-        if not frames:
+        # Stream over all files, aggregate per time window
+        metrics_by_window = build_windowed_metrics_for_dir(DATA_DIR, window_days=window_days)
+
+        if not metrics_by_window:
             return {"error": f"No parsable files in {DATA_DIR.resolve()}"}
 
-        df = pl.concat(frames, how="vertical_relaxed")
+        outputs = []
+        for window_key, metrics in metrics_by_window.items():
+            # window_key is ISO start-of-window or "unknown"
+            period_label = (
+                f"{window_key} (window={window_days}d)" if window_key != "unknown"
+                else "Unknown period"
+            )
 
-        metrics = build_metrics(df)
-        report_md = generate_report(metrics, period="This Week")
+            report_md = generate_report(metrics, period=period_label)
 
-        outpath = OUT_DIR / "access_control_report.md"
-        outpath.write_text(report_md, encoding="utf-8")
-        return {"ok": True, "output": str(outpath)}
+            # Make filename safe for filesystem
+            filename_safe = window_key.replace(":", "-") if window_key != "unknown" else "unknown"
+            outpath = OUT_DIR / f"access_control_report_{filename_safe}.md"
+            outpath.write_text(report_md, encoding="utf-8")
+
+            outputs.append({"window": window_key, "output": str(outpath)})
+
+        return {"ok": True, "windows": outputs}
 
     except Exception:
         tb = traceback.format_exc()

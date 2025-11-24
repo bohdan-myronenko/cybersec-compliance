@@ -1,10 +1,16 @@
-import os, json
+import os
+import json
+import datetime as dt
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict, Optional, Iterable
+
 import polars as pl
 from jinja2 import Template
-from .universal_logs.sniffers import sniff_format
-from .universal_logs.normalizers import normalize_line
-from .universal_logs.aggregations import rollups
+
+from .universal_logs.sniffers import resolve_format
+from .universal_logs.normalizers import normalize_line, parse_time_any
 from .kb_loader.loader import load_kb
 from .llm_clients.ollama_chat import OllamaChatClient
 from .llm_clients.external_chat import ExternalChatClient
@@ -25,23 +31,276 @@ Instructions:
 - Keep bullets short (<= 25 words).
 """
 
-ECS_COLS = ["@ts","user","src_ip","dst_ip","action","status","resource","msg","raw"]
+ECS_COLS = ["@ts", "user", "src_ip", "dst_ip", "action", "status", "resource", "msg", "raw"]
 
 
-def read_lines(path: Path, limit=None):
+# --------------------------------------------------------------------
+# File reading / normalisation (RBA-aware, streaming)
+# --------------------------------------------------------------------
+def read_lines(path: Path, limit: Optional[int] = None) -> Iterable[str]:
+    """Simple helper to read lines from a file, with optional limit."""
     with path.open("r", encoding="utf-8", errors="ignore") as f:
-        if limit:
-            return [next(f, "") for _ in range(limit)]
-        return f.readlines()
+        if limit is not None:
+            for _ in range(limit):
+                ln = f.readline()
+                if not ln:
+                    break
+                yield ln
+        else:
+            for ln in f:
+                yield ln
+
+
+def iter_normalized_records(path: Path, user_format: Optional[str] = None):
+    """
+    Stream normalised ECS-like records from a file, without loading the whole file.
+
+    For RBA:
+    - resolve_format() should detect "rba" from the header.
+    - normalize_line(..., "rba") will map each CSV row into ECS_MIN + RBA extras.
+
+    We:
+    - Read up to 50 lines as a sample to detect/resolve format.
+    - Use that format for the rest of the file.
+    - Yield one normalised dict per log line (skipping header rows).
+    """
+    sample_lines = []
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        for _ in range(50):
+            ln = f.readline()
+            if not ln:
+                break
+            sample_lines.append(ln)
+
+        if not sample_lines:
+            return
+
+        fmt = resolve_format(sample_lines, user_format=user_format)
+
+        # First yield the sample lines
+        for ln in sample_lines:
+            if not ln.strip():
+                continue
+            rec = normalize_line(ln, fmt)
+            if rec is not None:
+                yield rec
+
+        # Then stream the rest of the file line-by-line
+        for ln in f:
+            if not ln.strip():
+                continue
+            rec = normalize_line(ln, fmt)
+            if rec is not None:
+                yield rec
 
 
 def normalize_file(path: Path) -> pl.DataFrame:
-    lines = read_lines(path)
-    fmt = sniff_format(lines)
-    recs = [normalize_line(ln, fmt) for ln in lines if ln.strip()]
+    """
+    Eagerly normalise a whole file into a DataFrame.
+
+    NOTE:
+    - Kept only for small tests / debugging.
+    - For real RBA workloads, use iter_normalized_records() instead.
+    """
+    user_format = os.getenv("LOG_FORMAT")
+    recs = list(iter_normalized_records(path, user_format=user_format))
+    if not recs:
+        return pl.DataFrame()
     return pl.DataFrame(recs)
 
 
+# --------------------------------------------------------------------
+# Metrics accumulator (RBA-specific, streaming)
+# --------------------------------------------------------------------
+@dataclass
+class MetricsAccumulator:
+    """
+    Streaming accumulator for RBA login events.
+
+    We expect normalised records to include at least:
+      - "@ts"  : ISO-8601 timestamp string or raw timestamp string
+      - "user" : stringified "User ID"
+      - "src_ip"
+      - "status" : "success" / "fail"
+      - "is_attack_ip" : bool-ish
+      - "is_account_takeover" : bool-ish
+    """
+
+    total_rows: int = 0
+    users: set = field(default_factory=set)
+    src_ips: set = field(default_factory=set)
+
+    failures_total: int = 0
+    successes_total: int = 0
+    fail_ip_counts: Counter = field(default_factory=Counter)
+
+    attack_ip_attempts: int = 0
+    attack_ip_ips: set = field(default_factory=set)
+
+    account_takeovers: int = 0
+    users_with_takeover: set = field(default_factory=set)
+
+    def _to_bool(self, value) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        s = str(value).strip().lower()
+        return s in {"1", "true", "yes", "y", "t"}
+
+    def update(self, rec: Dict):
+        """Consume a single normalised log record and update counters."""
+        self.total_rows += 1
+
+        user = str(rec.get("user") or "").strip()
+        src_ip = (rec.get("src_ip") or "").strip()
+        status = (rec.get("status") or "").strip().lower()
+
+        if user:
+            self.users.add(user)
+        if src_ip:
+            self.src_ips.add(src_ip)
+
+        # Success / failure
+        if status == "fail":
+            self.failures_total += 1
+            if src_ip:
+                self.fail_ip_counts[src_ip] += 1
+        elif status == "success":
+            self.successes_total += 1
+
+        # Attack IP & Account Takeover flags from RBA
+        is_attack_ip = self._to_bool(rec.get("is_attack_ip"))
+        is_ato = self._to_bool(rec.get("is_account_takeover"))
+
+        if is_attack_ip:
+            self.attack_ip_attempts += 1
+            if src_ip:
+                self.attack_ip_ips.add(src_ip)
+
+        if is_ato:
+            self.account_takeovers += 1
+            if user:
+                self.users_with_takeover.add(user)
+
+    def finalize(self) -> Dict:
+        """Produce a metrics dict compatible with generate_report()."""
+        distinct_users = len(self.users)
+        distinct_src_ips = len(self.src_ips)
+
+        failures = self.failures_total
+        successes = self.successes_total
+        auth_total = failures + successes or 1
+        fail_rate = failures / auth_total
+
+        top_ips_list = [
+            {"ip": ip, "count": int(cnt)}
+            for ip, cnt in self.fail_ip_counts.most_common(5)
+        ]
+
+        # MFA: RBA dataset has no explicit MFA info → we are honest about that.
+        mfa_total_users = distinct_users
+        mfa_enabled_users = 0
+        mfa_coverage_pct = 0.0
+
+        metrics = {
+            "mfa": {
+                "total_users": int(mfa_total_users),
+                "enabled_users": int(mfa_enabled_users),
+                "coverage_pct": float(mfa_coverage_pct),
+            },
+            "auth_failures": {
+                "total": int(failures),
+                "success_total": int(successes),
+                "fail_rate": float(round(fail_rate, 4)),
+                "top_ips": top_ips_list,
+                "attack_ip_attempts": int(self.attack_ip_attempts),
+                "attack_ip_distinct_ips": int(len(self.attack_ip_ips)),
+                "account_takeovers": int(self.account_takeovers),
+                "users_with_takeover": int(len(self.users_with_takeover)),
+            },
+            "admins": {
+                # No role information in RBA dataset → cannot infer real admin stats.
+                "count": 0,
+                "with_mfa": 0,
+                "last_review_date": "unknown",
+            },
+            "exceptions": [],
+            "frame": {
+                "rows": int(self.total_rows),
+                "distinct_users": int(distinct_users),
+                "distinct_src_ips": int(distinct_src_ips),
+            },
+        }
+
+        return metrics
+
+
+# --------------------------------------------------------------------
+# Time windowing (e.g. per week) – uses @ts from RBA
+# --------------------------------------------------------------------
+def compute_window_start(ts: Optional[dt.datetime], window_days: int) -> str:
+    """
+    Compute a stable window key given a timestamp and window size in days.
+
+    - For ts=None, returns 'unknown'.
+    - For ts, we floor to midnight, then group by blocks of `window_days` days.
+    """
+    if ts is None:
+        return "unknown"
+
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(dt.timezone.utc).replace(tzinfo=None)
+
+    date = ts.date()
+    ordinal = date.toordinal()
+    base_ordinal = (ordinal // window_days) * window_days
+    start_date = dt.date.fromordinal(base_ordinal)
+    start_dt = dt.datetime.combine(start_date, dt.time.min)
+    return start_dt.isoformat()
+
+
+def build_windowed_metrics_for_dir(
+    data_dir: Path, window_days: int = 7
+) -> Dict[str, Dict]:
+    """
+    Stream over all RBA CSV files in data_dir, group events into fixed-duration
+    windows (e.g., 7 days), and compute metrics per window without ever
+    materialising the full dataset in memory.
+
+    Returns:
+        dict: {window_key: metrics_dict}
+    """
+    acc_by_window: Dict[str, MetricsAccumulator] = {}
+    user_format = os.getenv("LOG_FORMAT")  # may be None; sniffers should detect "rba"
+
+    for p in data_dir.rglob("*"):
+        if not p.is_file():
+            continue
+
+        for rec in iter_normalized_records(p, user_format=user_format):
+            ts_raw = rec.get("@ts")
+            ts: Optional[dt.datetime] = None
+            if isinstance(ts_raw, str) and ts_raw.strip():
+                ts = parse_time_any(ts_raw)
+
+            window_key = compute_window_start(ts, window_days)
+            acc = acc_by_window.get(window_key)
+            if acc is None:
+                acc = MetricsAccumulator()
+                acc_by_window[window_key] = acc
+            acc.update(rec)
+
+    metrics_by_window: Dict[str, Dict] = {}
+    for win, acc in acc_by_window.items():
+        metrics_by_window[win] = acc.finalize()
+
+    return metrics_by_window
+
+
+# --------------------------------------------------------------------
+# (Legacy) DataFrame-based metrics – for small tests only
+# --------------------------------------------------------------------
 def enforce_schema_types(df: pl.DataFrame) -> pl.DataFrame:
     """Ensure all expected columns exist and have safe types (no Null dtypes)."""
     for c in ECS_COLS:
@@ -74,48 +333,23 @@ def enforce_schema_types(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def build_metrics(df: pl.DataFrame) -> dict:
-    """Build minimal demo metrics for access-control reporting."""
-    # enforce safe types to avoid Null-series errors
+    """
+    DataFrame-based metrics, using the same RBA-specific accumulator.
+
+    NOTE:
+      - Not used in the main streaming path.
+      - Handy for smaller subsets of the dataset.
+    """
     df = enforce_schema_types(df)
-
-    total_rows = df.height
-
-    # Authentication failures
-    failures_df = df.filter(pl.col("status") == "fail")
-    failures_total = failures_df.height
-
-    # Top IPs by event count (very simple example)
-    top_ips = (
-        df.filter(pl.col("src_ip") != "")
-          .group_by("src_ip")
-          .len()
-          .sort("len", descending=True)
-          .limit(5)
-          .rename({"len": "count"})
-          .to_dicts()
-    )
-
-    metrics = {
-        "mfa": {
-            "total_users": 120,
-            "enabled_users": 118,
-            "coverage_pct": round(118 / 120 * 100, 2),
-        },
-        "auth_failures": {
-            "total": int(failures_total),
-            "top_ips": [{"ip": d["src_ip"], "count": int(d["count"])} for d in top_ips],
-        },
-        "admins": {
-            "count": 8,
-            "with_mfa": 8,
-            "last_review_date": "2025-10-31",
-        },
-        "exceptions": [],
-        "frame": {"rows": int(total_rows)},
-    }
-    return metrics
+    acc = MetricsAccumulator()
+    for rec in df.to_dicts():
+        acc.update(rec)
+    return acc.finalize()
 
 
+# --------------------------------------------------------------------
+# Legal loading + LLM calls
+# --------------------------------------------------------------------
 def load_legal():
     docs = load_kb("/kb")
     text = "\n\n".join(
@@ -139,7 +373,7 @@ def choose_chat():
     return OllamaChatClient(config.OLLAMA_BASE_URL, config.LLM_MODEL)
 
 
-def generate_report(metrics: dict, period="This Week"):
+def generate_report(metrics: dict, period: str = "This Week") -> str:
     legal_text, refs = load_legal()
     prompt = ANSWER_PROMPT.format(
         metrics_json=json.dumps(metrics, ensure_ascii=False),
@@ -148,10 +382,12 @@ def generate_report(metrics: dict, period="This Week"):
     client = choose_chat()
     prose = client.chat(config.SYSTEM_PROMPT, prompt)
 
-    # Render to template
     tpl_path = Path(__file__).parent / "templates" / "access_control_report.md.j2"
     tpl = Template(tpl_path.read_text(encoding="utf-8"))
     md = tpl.render(
-        metrics=metrics, period=period, observations=prose, legal_refs=refs
+        metrics=metrics,
+        period=period,
+        observations=prose,
+        legal_refs=refs,
     )
     return md

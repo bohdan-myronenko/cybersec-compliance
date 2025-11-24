@@ -1,17 +1,41 @@
 # Access Control Compliance Summary
 
-**Scope:** Access control (authentication, MFA, privileged access)  
+**Scope:** Access control (authentication, anomalous login attempts, privileged risks)  
 **Period:** {{ period }}
 
 ## Key Metrics
-- MFA coverage: {{ metrics.mfa.coverage_pct }}% ({{ metrics.mfa.enabled_users }}/{{ metrics.mfa.total_users }}) [NIS2-21.2.i]
-- Admin accounts: {{ metrics.admins.with_mfa }}/{{ metrics.admins.count }} with MFA; last review: {{ metrics.admins.last_review_date }} [ISO27001-A.9]
-- Authentication failures: {{ metrics.auth_failures.total }} total; top IPs: {% for ip in metrics.auth_failures.top_ips[:5] %}{{ ip.ip }} ({{ ip.count }}){% if not loop.last %}, {% endif %}{% endfor %}
+
+- Total login attempts: **{{ metrics.frame.rows }}**
+- Distinct users: **{{ metrics.frame.distinct_users }}**
+- Distinct source IPs: **{{ metrics.frame.distinct_src_ips }}**
+
+### Authentication
+- Successful logins: **{{ metrics.auth_failures.success_total }}**
+- Failed logins: **{{ metrics.auth_failures.total }}**
+- Failure rate: **{{ metrics.auth_failures.fail_rate | round(4) }}**
+- Top failing IPs:  
+{% if metrics.auth_failures.top_ips %}
+  {% for ip in metrics.auth_failures.top_ips %}
+  - {{ ip.ip }} ({{ ip.count }})
+  {% endfor %}
+{% else %}
+  - No failures detected
+{% endif %}
+
+### Attack Surface Indicators
+- Known attack IP attempts: **{{ metrics.auth_failures.attack_ip_attempts }}**
+- Unique attack IPs: **{{ metrics.auth_failures.attack_ip_distinct_ips }}**
+- Confirmed account takeover events: **{{ metrics.auth_failures.account_takeovers }}**
+- Users impacted by takeovers: **{{ metrics.auth_failures.users_with_takeover }}**
 
 ## Notable Exceptions
+{% if metrics.exceptions %}
 {% for ex in metrics.exceptions %}
-- {{ ex.type }} — {{ ex.entity }} ({{ ex.count }}) [NIS2-21.2.i]
+- {{ ex.type }} — {{ ex.entity }} ({{ ex.count }})
 {% endfor %}
+{% else %}
+_No exceptions reported._
+{% endif %}
 
 ## Observations
 {{ observations }}
