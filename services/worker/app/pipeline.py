@@ -4,7 +4,7 @@ import datetime as dt
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Iterable
+from typing import Dict, Optional, Iterable, Callable
 
 import polars as pl
 from jinja2 import Template
@@ -15,6 +15,7 @@ from .kb_loader.loader import load_kb
 from .llm_clients.ollama_chat import OllamaChatClient
 from .llm_clients.external_chat import ExternalChatClient
 from . import config
+from .progress import update_progress
 
 ANSWER_PROMPT = """Question:
 Generate a concise access-control compliance section using the METRICS JSON and LEGAL TEXTS below.
@@ -274,11 +275,19 @@ def build_windowed_metrics_for_dir(
     acc_by_window: Dict[str, MetricsAccumulator] = {}
     user_format = os.getenv("LOG_FORMAT")  # may be None; sniffers should detect "rba"
 
-    for p in data_dir.rglob("*"):
-        if not p.is_file():
-            continue
+    # First, scan for files
+    update_progress("scan", "Discovering log files...")
+    files = [p for p in data_dir.rglob("*") if p.is_file()]
+    update_progress("scan", f"Found {len(files)} file(s) to process")
 
+    # Process each file
+    update_progress("normalize", "Starting log normalization...")
+    total_records = 0
+    for i, p in enumerate(files, 1):
+        update_progress("normalize", f"Processing file {i}/{len(files)}: {p.name}")
+        
         for rec in iter_normalized_records(p, user_format=user_format):
+            total_records += 1
             ts_raw = rec.get("@ts")
             ts: Optional[dt.datetime] = None
             if isinstance(ts_raw, str) and ts_raw.strip():
@@ -290,11 +299,19 @@ def build_windowed_metrics_for_dir(
                 acc = MetricsAccumulator()
                 acc_by_window[window_key] = acc
             acc.update(rec)
+            
+            # Update progress every 10000 records
+            if total_records % 10000 == 0:
+                update_progress("normalize", f"Processed {total_records:,} records from {i}/{len(files)} files")
 
+    update_progress("metrics", f"Finalizing metrics for {len(acc_by_window)} time window(s)...")
+    
     metrics_by_window: Dict[str, Dict] = {}
     for win, acc in acc_by_window.items():
         metrics_by_window[win] = acc.finalize()
 
+    update_progress("metrics", f"Computed metrics: {total_records:,} records across {len(metrics_by_window)} window(s)")
+    
     return metrics_by_window
 
 
@@ -373,15 +390,22 @@ def choose_chat():
     return OllamaChatClient(config.OLLAMA_BASE_URL, config.LLM_MODEL)
 
 
-def generate_report(metrics: dict, period: str = "This Week") -> str:
+def generate_report(metrics: dict, period: str = "This Week", window_info: str = "") -> str:
+    update_progress("legal", f"Loading legal compliance texts{window_info}...")
     legal_text, refs = load_legal()
+    update_progress("legal", f"Loaded {len(refs)} relevant legal reference(s)")
+    
     prompt = ANSWER_PROMPT.format(
         metrics_json=json.dumps(metrics, ensure_ascii=False),
         legal_text=legal_text,
     )
+    
+    update_progress("llm", f"Querying LLM for compliance analysis{window_info}...")
     client = choose_chat()
     prose = client.chat(config.SYSTEM_PROMPT, prompt)
+    update_progress("llm", "LLM analysis complete")
 
+    update_progress("render", f"Rendering compliance report{window_info}...")
     tpl_path = Path(__file__).parent / "templates" / "access_control_report.md.j2"
     tpl = Template(tpl_path.read_text(encoding="utf-8"))
     md = tpl.render(

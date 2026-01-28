@@ -5,6 +5,25 @@ networks:
     driver: bridge
 
 services:
+  webui:
+    build: ./services/webui
+    container_name: webui
+    env_file: .env
+    ports:
+      - "8501:8501"
+    networks:
+      - public
+      - private
+    environment:
+      API_URL: http://api:8080
+      OUT_DIR: /out
+      DATA_DIR: /data
+    depends_on:
+      - api
+    volumes:
+      - ./out:/out:ro
+      - ./data:/data:ro
+
   api:
     build: ./services/api
     container_name: api

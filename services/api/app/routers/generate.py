@@ -11,3 +11,13 @@ def generate_access_control(payload: dict = Body(default={})):
         return r.json()
     except Exception as e:
         return {"error": "api_parse_error", "detail": str(e), "raw": r.text}
+
+
+@router.get("/progress")
+def get_generation_progress():
+    """Get the current progress of report generation from the worker."""
+    try:
+        r = requests.get(f"{WORKER_URL}/progress", timeout=5)
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        return {"status": "error", "message": str(e)}
