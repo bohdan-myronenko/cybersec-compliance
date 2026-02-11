@@ -35,9 +35,11 @@ services:
       - private
     environment:
       WORKER_URL: http://worker:8081
+      REDIS_URL: redis://redis:6379
     depends_on:
       - worker
       - ollama
+      - redis
     volumes:
       - ./warehouse:/app/warehouse
       - ./kb:/app/kb:ro
@@ -53,14 +55,17 @@ services:
       - private
     expose:
       - "8081"
+    environment:
+      REDIS_URL: redis://redis:6379
     depends_on:
       - ollama
+      - redis
     volumes:
       - ./warehouse:/app/warehouse
-      - ./kb:/app/kb:ro
+      - ./kb:/kb:rw
       - ./index:/app/index
       - ./out:/out:rw
-      - ./data:/data:ro
+      - ./data:/data:rw
     command: ["python", "-m", "app.run_worker"]
     
   ollama:
@@ -80,5 +85,17 @@ services:
               count: all
               capabilities: [gpu]
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks:
+      - private
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
 volumes:
   ollama: {}
+  redis_data: {}
