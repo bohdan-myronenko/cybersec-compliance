@@ -148,7 +148,7 @@ def render_sidebar():
         
         page = st.radio(
             "Select Page",
-            ["Dashboard", "Generate Reports", "View Reports", "Data Files", "Settings"],
+            ["Dashboard", "Chat", "Format Onboarding", "Generate Reports", "View Reports", "Data Files", "Settings"],
             label_visibility="collapsed",
         )
         
@@ -162,6 +162,20 @@ def render_sidebar():
             st.success("API: Online")
         else:
             st.error("API: Offline")
+        
+        # Agent system status
+        try:
+            agent_resp = requests.get(f"{API_URL}/agent/health", timeout=5)
+            if agent_resp.status_code == 200:
+                agent_health = agent_resp.json()
+                if agent_health.get("status") == "healthy":
+                    st.success("Agent System: Online")
+                else:
+                    st.warning("Agent System: Degraded")
+            else:
+                st.warning("Agent System: Unknown")
+        except:
+            st.warning("Agent System: Unknown")
         
         return page
 
@@ -243,12 +257,16 @@ def render_generate_reports():
         df["size_kb"] = df["size"] / 1024
         df["modified"] = pd.to_datetime(df["modified"])
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total Files", len(data_files))
         with col2:
             total_size = sum(f["size"] for f in data_files)
             st.metric("Total Size", f"{total_size / (1024*1024):.2f} MB")
+        with col3:
+            if st.button("🔍 Check Format Status", use_container_width=True):
+                st.session_state["check_formats"] = True
+                st.rerun()
         
         st.dataframe(
             df[["name", "path", "size_kb", "modified"]].rename(columns={
@@ -260,6 +278,62 @@ def render_generate_reports():
             use_container_width=True,
             hide_index=True,
         )
+        
+        # Check format status if requested
+        if st.session_state.get("check_formats"):
+            st.subheader("Format Status Check")
+            with st.spinner("Scanning files for format compatibility..."):
+                try:
+                    scan_resp = requests.get(f"{API_URL}/agent/scan-data-formats", timeout=60)
+                    if scan_resp.status_code == 200:
+                        scan_data = scan_resp.json()
+                        summary = scan_data.get("summary", {})
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Matched", summary.get("matched", 0), delta="OK" if summary.get("matched", 0) > 0 else None)
+                        with col2:
+                            unmatched = summary.get("unmatched", 0)
+                            st.metric("Unmatched", unmatched, delta="Warning" if unmatched > 0 else None, delta_color="inverse" if unmatched > 0 else "normal")
+                        with col3:
+                            st.metric("Unknown", summary.get("unknown", 0))
+                        
+                        # Show warning for unmatched files
+                        unmatched_files = scan_data.get("unmatched_files", [])
+                        if unmatched_files:
+                            st.error(f"""
+                            🛑 **{len(unmatched_files)} file(s) have unrecognized formats!**
+                            
+                            These files may not be processed correctly. Consider onboarding their formats first.
+                            """)
+                            
+                            with st.expander(f"View unmatched files ({len(unmatched_files)})"):
+                                for uf in unmatched_files:
+                                    closest = uf.get("closest_match")
+                                    if closest:
+                                        st.markdown(f"- **{uf['file']}**: Closest match: {closest['format_name']} ({closest['similarity']:.0%})")
+                                    else:
+                                        st.markdown(f"- **{uf['file']}**: No similar format found")
+                            
+                            st.warning("👉 Go to **Format Onboarding** to add support for these formats.")
+                        else:
+                            st.success("✅ All files match known formats!")
+                        
+                        # Show matched files
+                        matched_files = scan_data.get("matched_files", [])
+                        if matched_files:
+                            with st.expander(f"View matched files ({len(matched_files)})"):
+                                for mf in matched_files:
+                                    fmt = mf.get("matched_format", mf.get("builtin_format", "unknown"))
+                                    st.markdown(f"- **{mf['file']}**: {fmt}")
+                    else:
+                        st.warning("Could not check format status")
+                except Exception as e:
+                    st.warning(f"Could not check format status: {e}")
+            
+            if st.button("Hide Format Check"):
+                st.session_state["check_formats"] = False
+                st.rerun()
     else:
         st.warning("No data files found in the data directory. Please add log files to process.")
     
@@ -562,12 +636,623 @@ def render_settings():
     """)
 
 
+def render_format_onboarding():
+    """Render the format onboarding page for agent-assisted log format configuration."""
+    st.title("🔧 Format Onboarding")
+    st.markdown("Use AI to analyze new log formats and configure field mappings.")
+    
+    # Initialize session state
+    if "analysis_result" not in st.session_state:
+        st.session_state.analysis_result = None
+    if "suggested_metrics" not in st.session_state:
+        st.session_state.suggested_metrics = None
+    if "step" not in st.session_state:
+        st.session_state.step = 1
+    
+    # Show existing formats
+    st.header("Registered Formats")
+    try:
+        formats_resp = requests.get(f"{API_URL}/agent/formats", timeout=10)
+        if formats_resp.status_code == 200:
+            formats_data = formats_resp.json()
+            formats_list = formats_data.get("formats", [])
+            if formats_list:
+                df = pd.DataFrame(formats_list)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No custom formats registered yet.")
+        else:
+            st.warning("Could not load registered formats.")
+    except Exception as e:
+        st.warning(f"Could not connect to agent service: {e}")
+    
+    st.divider()
+    
+    # Step 1: Upload/Paste Samples
+    st.header("Step 1: Provide Log Samples")
+    st.markdown("Upload a log file or paste sample log lines for analysis.")
+    
+    input_method = st.radio(
+        "Input Method",
+        ["Upload File", "Paste Text"],
+        horizontal=True,
+    )
+    
+    samples = []
+    
+    if input_method == "Upload File":
+        uploaded_file = st.file_uploader(
+            "Upload a log file (first 50 lines will be used)",
+            type=["log", "txt", "csv", "json", "jsonl"],
+        )
+        if uploaded_file:
+            content = uploaded_file.read().decode("utf-8", errors="ignore")
+            samples = content.strip().split("\n")[:50]
+            st.success(f"Loaded {len(samples)} lines from file")
+            with st.expander("Preview (first 10 lines)"):
+                for i, line in enumerate(samples[:10], 1):
+                    st.code(f"{i}: {line[:200]}{'...' if len(line) > 200 else ''}")
+    else:
+        sample_text = st.text_area(
+            "Paste log samples (one per line)",
+            height=200,
+            placeholder="Paste your log samples here...\nEach line should be a separate log entry.",
+        )
+        if sample_text:
+            samples = [l for l in sample_text.strip().split("\n") if l.strip()][:50]
+            st.info(f"{len(samples)} sample lines ready for analysis")
+    
+    # Quick analyze button
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔍 Quick Detect Format", disabled=len(samples) == 0):
+            with st.spinner("Detecting format..."):
+                try:
+                    resp = requests.post(
+                        f"{API_URL}/agent/quick-analyze",
+                        json={"samples": samples},
+                        timeout=30,
+                    )
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        fmt_type = result.get("format_type", "unknown")
+                        confidence = result.get("confidence", 0)
+                        custom_match = result.get("custom_format_match")
+                        has_onboarded = result.get("has_onboarded_match", False)
+                        recommendation = result.get("recommendation", "")
+                        
+                        # Show heuristic detection
+                        st.info(f"**Heuristic detection:** {fmt_type} (confidence: {confidence:.0%})")
+                        
+                        # Show custom format match status
+                        if custom_match:
+                            similarity = custom_match.get("similarity", 0)
+                            match_name = custom_match.get("format_name", custom_match.get("format_id", "Unknown"))
+                            
+                            if similarity >= 0.8:
+                                st.success(f"✅ **Exact match found!** This format is already onboarded as: **{match_name}** ({similarity:.0%} match)")
+                            elif similarity >= 0.5:
+                                st.warning(f"⚠️ **Partial match found:** {match_name} ({similarity:.0%} match). You may want to update the existing format or create a new one.")
+                            else:
+                                st.info(f"📋 **Closest onboarded format:** {match_name} ({similarity:.0%} match)")
+                        
+                        if not has_onboarded:
+                            st.error("""
+                            🛑 **Format not onboarded!**
+                            
+                            This log format has not been added to the system yet. 
+                            Click "Full AI Analysis" below to analyze and onboard this format.
+                            """)
+                        
+                        if recommendation:
+                            st.caption(f"💡 {recommendation}")
+                    else:
+                        st.error("Quick detection failed")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+    
+    with col2:
+        if st.button("🤖 Full AI Analysis", type="primary", disabled=len(samples) == 0):
+            with st.spinner("Analyzing with AI (this may take a minute)..."):
+                try:
+                    resp = requests.post(
+                        f"{API_URL}/agent/analyze-format",
+                        json={"samples": samples, "max_samples": 20},
+                        timeout=180,
+                    )
+                    if resp.status_code == 200:
+                        st.session_state.analysis_result = resp.json()
+                        st.session_state.step = 2
+                        st.success("Analysis complete!")
+                        st.rerun()
+                    else:
+                        st.error(f"Analysis failed: {resp.text}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+    
+    # Step 2: Review Mappings
+    if st.session_state.analysis_result and st.session_state.step >= 2:
+        st.divider()
+        st.header("Step 2: Review Field Mappings")
+        
+        result = st.session_state.analysis_result
+        
+        if "error" in result:
+            st.error(f"Analysis error: {result['error']}")
+        else:
+            # Show confidence and reasoning
+            col1, col2 = st.columns(2)
+            with col1:
+                confidence = result.get("confidence", 0)
+                st.metric("AI Confidence", f"{confidence:.0%}")
+            with col2:
+                format_type = result.get("format_type", "unknown")
+                st.metric("Detected Type", format_type)
+            
+            if result.get("reasoning"):
+                with st.expander("AI Reasoning"):
+                    st.markdown(result["reasoning"])
+            
+            # Editable format name
+            format_name = st.text_input(
+                "Format Name",
+                value=result.get("format_name", "Custom Format"),
+                help="A descriptive name for this log format",
+            )
+            
+            format_id = st.text_input(
+                "Format ID",
+                value=format_name.lower().replace(" ", "_").replace("-", "_"),
+                help="Unique identifier (lowercase, no spaces)",
+            )
+            
+            # Field mappings table
+            st.subheader("Field Mappings")
+            st.markdown("Review and adjust the proposed mappings from source fields to ECS fields.")
+            
+            mappings = result.get("field_mappings", {})
+            ecs_options = ["@ts", "user", "src_ip", "dst_ip", "action", "status", "resource", "msg", "(unmapped)"]
+            
+            edited_mappings = {}
+            for source_field, ecs_field in mappings.items():
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    st.text_input(f"Source", value=source_field, disabled=True, key=f"src_{source_field}")
+                with col2:
+                    default_idx = ecs_options.index(ecs_field) if ecs_field in ecs_options else len(ecs_options) - 1
+                    selected = st.selectbox(
+                        f"Maps to",
+                        options=ecs_options,
+                        index=default_idx,
+                        key=f"ecs_{source_field}",
+                    )
+                    if selected != "(unmapped)":
+                        edited_mappings[source_field] = selected
+            
+            # Unmapped fields info
+            unmapped = result.get("unmapped_fields", [])
+            if unmapped:
+                with st.expander(f"Unmapped Fields ({len(unmapped)})"):
+                    for field in unmapped:
+                        name = field.get("name", "unknown")
+                        sample = field.get("sample_value", "N/A")
+                        use = field.get("potential_use", "")
+                        st.markdown(f"- **{name}**: `{sample}` - _{use}_")
+            
+            # Detection rules
+            with st.expander("Detection Rules"):
+                detection = result.get("detection_rules", {})
+                st.json(detection)
+            
+            # Approve button
+            if st.button("✅ Approve Mappings & Continue", type="primary"):
+                with st.spinner("Saving configuration..."):
+                    try:
+                        approve_resp = requests.post(
+                            f"{API_URL}/agent/approve-format",
+                            json={
+                                "format_id": format_id,
+                                "format_name": format_name,
+                                "format_type": result.get("format_type", "custom"),
+                                "detection_rules": result.get("detection_rules", {}),
+                                "field_mappings": edited_mappings,
+                                "unmapped_fields": unmapped,
+                                "approved_by": "webui_user",
+                            },
+                            timeout=30,
+                        )
+                        if approve_resp.status_code == 200:
+                            st.session_state.step = 3
+                            st.session_state.approved_format_id = format_id
+                            st.session_state.available_fields = list(edited_mappings.values())
+                            st.success("Configuration saved!")
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to save: {approve_resp.text}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+    
+    # Step 3: Metric Suggestions
+    if st.session_state.step >= 3:
+        st.divider()
+        st.header("Step 3: Configure Metrics")
+        
+        format_id = st.session_state.get("approved_format_id", "")
+        available_fields = st.session_state.get("available_fields", [])
+        unmapped_fields = st.session_state.analysis_result.get("unmapped_fields", []) if st.session_state.analysis_result else []
+        
+        st.info(f"Format: **{format_id}** | Available ECS fields: {', '.join(available_fields)}")
+        
+        # Get metric suggestions
+        if st.session_state.suggested_metrics is None:
+            if st.button("🤖 Get Metric Suggestions"):
+                with st.spinner("Getting AI suggestions for metrics..."):
+                    try:
+                        resp = requests.post(
+                            f"{API_URL}/agent/suggest-metrics",
+                            json={
+                                "format_id": format_id,
+                                "available_fields": available_fields,
+                                "unmapped_fields": unmapped_fields,
+                                "sample_stats": {},
+                            },
+                            timeout=180,
+                        )
+                        if resp.status_code == 200:
+                            st.session_state.suggested_metrics = resp.json().get("metrics", [])
+                            st.rerun()
+                        else:
+                            st.error(f"Failed: {resp.text}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+        
+        if st.session_state.suggested_metrics:
+            st.subheader("Suggested Metrics")
+            st.markdown("Select which metrics to enable for this format.")
+            
+            metrics = st.session_state.suggested_metrics
+            selected_metrics = []
+            
+            for metric in metrics:
+                metric_id = metric.get("metric_id", "unknown")
+                name = metric.get("name", metric_id)
+                desc = metric.get("description", "")
+                priority = metric.get("priority", "medium")
+                compliance = metric.get("compliance_relevance", [])
+                
+                priority_colors = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+                priority_icon = priority_colors.get(priority, "⚪")
+                
+                enabled = st.checkbox(
+                    f"{priority_icon} **{name}**",
+                    value=metric.get("enabled", True),
+                    key=f"metric_{metric_id}",
+                    help=f"{desc}\nCompliance: {', '.join(compliance) if compliance else 'N/A'}",
+                )
+                
+                if enabled:
+                    metric_copy = dict(metric)
+                    metric_copy["enabled"] = True
+                    selected_metrics.append(metric_copy)
+                
+                with st.expander(f"Details: {name}"):
+                    st.markdown(f"**Description:** {desc}")
+                    st.markdown(f"**Priority:** {priority}")
+                    st.markdown(f"**Required Fields:** {', '.join(metric.get('required_fields', []))}")
+                    if compliance:
+                        st.markdown(f"**Compliance:** {', '.join(compliance)}")
+                    if metric.get("computation"):
+                        st.json(metric["computation"])
+            
+            # Save metrics
+            if st.button("💾 Save Metric Configuration", type="primary"):
+                with st.spinner("Saving metrics..."):
+                    try:
+                        resp = requests.post(
+                            f"{API_URL}/agent/save-metrics",
+                            json={
+                                "format_id": format_id,
+                                "metrics": selected_metrics,
+                            },
+                            timeout=30,
+                        )
+                        if resp.status_code == 200:
+                            st.success("Metrics saved successfully!")
+                            st.balloons()
+                            # Reset for new format
+                            if st.button("➕ Onboard Another Format"):
+                                st.session_state.analysis_result = None
+                                st.session_state.suggested_metrics = None
+                                st.session_state.step = 1
+                                st.rerun()
+                        else:
+                            st.error(f"Failed: {resp.text}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+    
+    # Reset button
+    st.divider()
+    if st.button("🔄 Start Over"):
+        st.session_state.analysis_result = None
+        st.session_state.suggested_metrics = None
+        st.session_state.step = 1
+        st.rerun()
+
+
+# -----------------------------------------------------------------------------
+# Chat page helpers
+# -----------------------------------------------------------------------------
+
+def chat_api_message(message: str, history: list, include_context: bool = True) -> dict:
+    """Send message to chat API and return response."""
+    try:
+        resp = requests.post(
+            f"{API_URL}/chat",
+            json={"message": message, "history": history, "include_context": include_context},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"response": f"Error: {str(e)}", "sources": []}
+
+
+def chat_upload_logs(file) -> dict:
+    """Upload log file via API."""
+    try:
+        files = {"file": (file.name, file.getvalue())}
+        resp = requests.post(f"{API_URL}/upload/logs", files=files, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e), "ok": False}
+
+
+def chat_upload_kb(file) -> dict:
+    """Upload KB file via API."""
+    try:
+        files = {"file": (file.name, file.getvalue())}
+        resp = requests.post(f"{API_URL}/upload/kb", files=files, timeout=120)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e), "ok": False}
+
+
+def onboard_analyze_api(samples: list, max_samples: int = 20) -> dict:
+    """Call onboard/analyze with samples."""
+    try:
+        resp = requests.post(
+            f"{API_URL}/onboard/analyze",
+            json={"samples": samples, "max_samples": max_samples},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}
+
+
+def onboard_confirm_api(payload: dict) -> dict:
+    """Call onboard/confirm with approved config."""
+    try:
+        resp = requests.post(f"{API_URL}/onboard/confirm", json=payload, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}
+
+
+def render_chat():
+    """Render the Chat page: uploads, text input, command handling, Q&A with RAG."""
+    st.title("Chat")
+    st.markdown("Upload logs or KB, ask questions about compliance, or use **/generate** and **/onboard** (with an attached file).")
+
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "pending_onboard" not in st.session_state:
+        st.session_state.pending_onboard = None
+    if "last_uploaded_log" not in st.session_state:
+        st.session_state.last_uploaded_log = None  # {name, content_preview} for /onboard
+
+    # File upload zone
+    st.subheader("Upload")
+    col1, col2 = st.columns(2)
+    with col1:
+        log_file = st.file_uploader("Upload Logs", type=["txt", "csv", "json", "log"], key="chat_upload_logs")
+        do_upload_logs = st.button("Upload and analyze logs", key="btn_upload_logs")
+    with col2:
+        kb_file = st.file_uploader("Upload KB", type=["md"], key="chat_upload_kb")
+        do_upload_kb = st.button("Upload KB", key="btn_upload_kb")
+
+    if do_upload_logs and log_file is not None:
+        with st.spinner("Uploading and analyzing log file..."):
+            result = chat_upload_logs(log_file)
+            content_preview = log_file.getvalue().decode("utf-8", errors="ignore").splitlines()[:50]
+            if result.get("ok"):
+                st.session_state.last_uploaded_log = {"name": log_file.name, "content_preview": content_preview}
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"Log file **{result.get('filename', 'file')}** saved. "
+                    + (result.get("message", "") or (
+                        "Use **/onboard** to add this format." if result.get("needs_onboard")
+                        else "Format detected. You can **/generate** reports."
+                    )),
+                    "sources": [],
+                })
+            else:
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"Upload failed: {result.get('error', 'Unknown error')}",
+                    "sources": [],
+                })
+            st.rerun()
+    if do_upload_kb and kb_file is not None:
+        with st.spinner("Uploading KB and re-indexing..."):
+            result = chat_upload_kb(kb_file)
+            if result.get("ok"):
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"KB file **{result.get('filename', 'file')}** saved and index updated. You can ask questions about it.",
+                    "sources": [],
+                })
+            else:
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"Upload failed: {result.get('error', 'Unknown error')}",
+                    "sources": [],
+                })
+            st.rerun()
+
+    # Pending onboard confirmation UI
+    if st.session_state.pending_onboard:
+        pending = st.session_state.pending_onboard
+        st.info("Review proposed format mappings below. Confirm to save, or send a new message to cancel.")
+        st.json(pending.get("config", {}))
+        if st.button("Confirm and save format", key="confirm_onboard_btn"):
+            payload = {
+                "format_id": pending["format_id"],
+                "format_name": pending["config"].get("format_name", pending["format_id"]),
+                "format_type": pending["config"].get("format_type", "unknown"),
+                "detection_rules": pending["config"].get("detection_rules", {}),
+                "field_mappings": pending["config"].get("field_mappings", {}),
+                "unmapped_fields": pending["config"].get("unmapped_fields", []),
+                "approved_by": "webui_user",
+            }
+            confirm_result = onboard_confirm_api(payload)
+            if confirm_result.get("ok"):
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"Format **{pending['format_id']}** saved. You can now generate reports using this format.",
+                    "sources": [],
+                })
+                st.session_state.pending_onboard = None
+            else:
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"Save failed: {confirm_result.get('error', 'Unknown error')}",
+                    "sources": [],
+                })
+                st.session_state.pending_onboard = None
+            st.rerun()
+
+    # Chat history
+    st.subheader("Conversation")
+    for idx, msg in enumerate(st.session_state.chat_messages):
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        with st.chat_message(role):
+            st.markdown(content)
+            # Confidence badge + expandable factors (assistant messages with RAG)
+            confidence = msg.get("confidence")
+            if confidence is not None and role == "assistant":
+                if confidence >= 70:
+                    badge_color = "green"
+                elif confidence >= 40:
+                    badge_color = "orange"
+                else:
+                    badge_color = "red"
+                factors = msg.get("confidence_factors", [])
+                with st.expander(f":{badge_color}[Confidence: {confidence:.0f}%] — What impacted it?"):
+                    for f in factors:
+                        f_score = f.get("score", 0)
+                        f_name = f.get("name", "")
+                        f_desc = f.get("description", "")
+                        bar_val = max(0.0, min(f_score / 100.0, 1.0))
+                        st.markdown(f"**{f_name}** — {f_score:.0f}%")
+                        st.progress(bar_val)
+                        st.caption(f_desc)
+            # Sources (separate expander)
+            if msg.get("sources"):
+                with st.expander("Sources", expanded=False):
+                    for s in msg["sources"]:
+                        st.caption(f"{s.get('source', '')}: {s.get('title', '')}")
+
+    # Text input and send
+    user_input = st.chat_input("Message or /generate, /onboard (attach file above for commands)")
+    if user_input:
+        text = user_input.strip()
+        st.session_state.chat_messages.append({"role": "user", "content": text, "sources": []})
+
+        # Command handling
+        if text.lower().startswith("/generate"):
+            with st.spinner("Generating report..."):
+                gen_result = trigger_report_generation()
+                if gen_result.get("error"):
+                    st.session_state.chat_messages.append({
+                        "role": "assistant",
+                        "content": f"Report generation failed: {gen_result.get('error')}. {gen_result.get('detail', '')}",
+                        "sources": [],
+                    })
+                else:
+                    wins = gen_result.get("windows", [])
+                    st.session_state.chat_messages.append({
+                        "role": "assistant",
+                        "content": f"Generated {len(wins)} report(s). " + "; ".join(f"`{w.get('output', '')}`" for w in wins),
+                        "sources": [],
+                    })
+                st.rerun()
+
+        elif text.lower().startswith("/onboard"):
+            last_log = st.session_state.get("last_uploaded_log")
+            if not last_log or not last_log.get("content_preview"):
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": "**/onboard** requires a log file. Use 'Upload Logs' and click 'Upload and analyze logs', then send **/onboard**.",
+                    "sources": [],
+                })
+            else:
+                with st.spinner("Analyzing format..."):
+                    samples = last_log["content_preview"]
+                    analyze_result = onboard_analyze_api(samples)
+                    if analyze_result.get("error"):
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": f"Analysis failed: {analyze_result.get('error')}",
+                            "sources": [],
+                        })
+                    else:
+                        format_id = (analyze_result.get("format_name") or "custom").replace(" ", "_").lower()[:64]
+                        st.session_state.pending_onboard = {
+                            "format_id": format_id,
+                            "config": analyze_result,
+                            "samples_file_name": last_log.get("name", ""),
+                        }
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": "Proposed format mappings are shown below. Review and click **Confirm and save format** to onboard.",
+                            "sources": [],
+                        })
+                    st.rerun()
+
+        else:
+            # Regular chat with RAG
+            history = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.chat_messages[:-1]
+            ]
+            result = chat_api_message(text, history, include_context=True)
+            st.session_state.chat_messages.append({
+                "role": "assistant",
+                "content": result.get("response", ""),
+                "sources": result.get("sources", []),
+                "confidence": result.get("confidence"),
+                "confidence_factors": result.get("confidence_factors", []),
+            })
+            st.rerun()
+
+
 def main():
     """Main application entry point."""
     page = render_sidebar()
     
     if page == "Dashboard":
         render_dashboard()
+    elif page == "Chat":
+        render_chat()
+    elif page == "Format Onboarding":
+        render_format_onboarding()
     elif page == "Generate Reports":
         render_generate_reports()
     elif page == "View Reports":

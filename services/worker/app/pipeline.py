@@ -4,18 +4,20 @@ import datetime as dt
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Iterable, Callable
+from typing import Dict, List, Optional, Iterable, Callable
 
 import polars as pl
 from jinja2 import Template
 
-from .universal_logs.sniffers import resolve_format
-from .universal_logs.normalizers import normalize_line, parse_time_any
+from .universal_logs.sniffers import resolve_format, resolve_format_with_custom
+from .universal_logs.normalizers import normalize_line, normalize_with_config, parse_time_any
 from .kb_loader.loader import load_kb
 from .llm_clients.ollama_chat import OllamaChatClient
 from .llm_clients.external_chat import ExternalChatClient
 from . import config
 from .progress import update_progress
+from .config_store import get_config_store, FormatConfigStore
+from .agents import InsightGenerationAgent
 
 ANSWER_PROMPT = """Question:
 Generate a concise access-control compliance section using the METRICS JSON and LEGAL TEXTS below.
@@ -52,13 +54,21 @@ def read_lines(path: Path, limit: Optional[int] = None) -> Iterable[str]:
                 yield ln
 
 
-def iter_normalized_records(path: Path, user_format: Optional[str] = None):
+def iter_normalized_records(
+    path: Path, 
+    user_format: Optional[str] = None,
+    config_store: Optional[FormatConfigStore] = None,
+):
     """
     Stream normalised ECS-like records from a file, without loading the whole file.
 
     For RBA:
     - resolve_format() should detect "rba" from the header.
     - normalize_line(..., "rba") will map each CSV row into ECS_MIN + RBA extras.
+
+    For custom formats:
+    - If config_store is provided, check custom format configs first.
+    - Custom configs use their detection_rules and field_mappings.
 
     We:
     - Read up to 50 lines as a sample to detect/resolve format.
@@ -76,13 +86,21 @@ def iter_normalized_records(path: Path, user_format: Optional[str] = None):
         if not sample_lines:
             return
 
-        fmt = resolve_format(sample_lines, user_format=user_format)
+        # Try to resolve format, checking custom configs first if available
+        fmt, custom_config = resolve_format_with_custom(
+            sample_lines, 
+            user_format=user_format,
+            config_store=config_store,
+        )
 
         # First yield the sample lines
         for ln in sample_lines:
             if not ln.strip():
                 continue
-            rec = normalize_line(ln, fmt)
+            if custom_config:
+                rec = normalize_with_config(ln, custom_config)
+            else:
+                rec = normalize_line(ln, fmt)
             if rec is not None:
                 yield rec
 
@@ -90,7 +108,10 @@ def iter_normalized_records(path: Path, user_format: Optional[str] = None):
         for ln in f:
             if not ln.strip():
                 continue
-            rec = normalize_line(ln, fmt)
+            if custom_config:
+                rec = normalize_with_config(ln, custom_config)
+            else:
+                rec = normalize_line(ln, fmt)
             if rec is not None:
                 yield rec
 
@@ -262,18 +283,40 @@ def compute_window_start(ts: Optional[dt.datetime], window_days: int) -> str:
 
 
 def build_windowed_metrics_for_dir(
-    data_dir: Path, window_days: int = 7
+    data_dir: Path, 
+    window_days: int = 7,
+    use_custom_formats: bool = True,
 ) -> Dict[str, Dict]:
     """
-    Stream over all RBA CSV files in data_dir, group events into fixed-duration
+    Stream over all log files in data_dir, group events into fixed-duration
     windows (e.g., 7 days), and compute metrics per window without ever
     materialising the full dataset in memory.
+
+    Args:
+        data_dir: Directory containing log files
+        window_days: Size of time windows in days
+        use_custom_formats: If True, check Redis for custom format configs
 
     Returns:
         dict: {window_key: metrics_dict}
     """
     acc_by_window: Dict[str, MetricsAccumulator] = {}
-    user_format = os.getenv("LOG_FORMAT")  # may be None; sniffers should detect "rba"
+    user_format = os.getenv("LOG_FORMAT")  # may be None; sniffers should detect format
+
+    # Get config store for custom formats
+    config_store = None
+    if use_custom_formats:
+        try:
+            config_store = get_config_store()
+            if config_store.ping():
+                custom_formats = config_store.list_formats()
+                if custom_formats:
+                    update_progress("scan", f"Loaded {len(custom_formats)} custom format config(s) from Redis")
+            else:
+                config_store = None
+        except Exception as e:
+            update_progress("scan", f"Redis unavailable, using built-in formats only: {e}")
+            config_store = None
 
     # First, scan for files
     update_progress("scan", "Discovering log files...")
@@ -286,7 +329,7 @@ def build_windowed_metrics_for_dir(
     for i, p in enumerate(files, 1):
         update_progress("normalize", f"Processing file {i}/{len(files)}: {p.name}")
         
-        for rec in iter_normalized_records(p, user_format=user_format):
+        for rec in iter_normalized_records(p, user_format=user_format, config_store=config_store):
             total_records += 1
             ts_raw = rec.get("@ts")
             ts: Optional[dt.datetime] = None
@@ -390,7 +433,26 @@ def choose_chat():
     return OllamaChatClient(config.OLLAMA_BASE_URL, config.LLM_MODEL)
 
 
-def generate_report(metrics: dict, period: str = "This Week", window_info: str = "") -> str:
+def generate_report(
+    metrics: dict, 
+    period: str = "This Week", 
+    window_info: str = "",
+    generate_insights: bool = True,
+    framework: str = "NIS2",
+) -> str:
+    """
+    Generate a compliance report from computed metrics.
+    
+    Args:
+        metrics: Computed metrics dict from MetricsAccumulator.finalize()
+        period: Human-readable period description
+        window_info: Additional context for progress updates
+        generate_insights: If True, run the insight generation agent
+        framework: Compliance framework to focus on
+        
+    Returns:
+        Markdown-formatted compliance report
+    """
     update_progress("legal", f"Loading legal compliance texts{window_info}...")
     legal_text, refs = load_legal()
     update_progress("legal", f"Loaded {len(refs)} relevant legal reference(s)")
@@ -404,6 +466,44 @@ def generate_report(metrics: dict, period: str = "This Week", window_info: str =
     client = choose_chat()
     prose = client.chat(config.SYSTEM_PROMPT, prompt)
     update_progress("llm", "LLM analysis complete")
+    
+    # Generate AI insights if enabled
+    insights = None
+    insights_text = ""
+    if generate_insights:
+        update_progress("insights", f"Generating AI insights{window_info}...")
+        try:
+            # Try to load historical baselines for comparison
+            baseline = []
+            try:
+                config_store = get_config_store()
+                if config_store.ping():
+                    # Get baselines for a generic format (we don't know which format was used)
+                    baseline = config_store.get_recent_baselines("default", count=3)
+            except Exception:
+                pass  # No baselines available
+            
+            insight_agent = InsightGenerationAgent(client)
+            insights = insight_agent.analyze(
+                metrics=metrics,
+                baseline=baseline if baseline else None,
+                framework=framework,
+                period=period,
+            )
+            insights_text = insight_agent.get_summary_text(insights)
+            update_progress("insights", f"Generated {len(insights.get('findings', []))} insight(s)")
+            
+            # Save metrics as baseline for future comparisons
+            try:
+                if config_store and config_store.ping():
+                    window_key = period.split()[0] if period else dt.datetime.utcnow().isoformat()
+                    config_store.save_baseline("default", window_key, metrics)
+            except Exception:
+                pass  # Non-critical
+                
+        except Exception as e:
+            update_progress("insights", f"Insight generation failed: {e}")
+            insights_text = f"_Insight generation encountered an error: {e}_"
 
     update_progress("render", f"Rendering compliance report{window_info}...")
     tpl_path = Path(__file__).parent / "templates" / "access_control_report.md.j2"
@@ -413,5 +513,7 @@ def generate_report(metrics: dict, period: str = "This Week", window_info: str =
         period=period,
         observations=prose,
         legal_refs=refs,
+        insights=insights,
+        insights_text=insights_text,
     )
     return md

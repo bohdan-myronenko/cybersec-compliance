@@ -297,3 +297,103 @@ def normalize_line(line: str, fmt: str):
         "msg": kv.get("message") or kv.get("msg") or line.strip(),
     }
     return to_ecs_min(rec, line)
+
+
+def normalize_with_config(line: str, config: dict) -> dict:
+    """
+    Normalize a log line using a custom format configuration.
+    
+    This function applies field mappings from a dynamically configured format
+    (stored in Redis) rather than using hardcoded format-specific logic.
+    
+    Args:
+        line: Raw log line
+        config: Custom format configuration containing:
+            - format_type: Base format type (jsonl, csv, kv, etc.)
+            - field_mappings: Dict mapping source field names to ECS field names
+            
+    Returns:
+        Normalized record with ECS fields
+    """
+    format_type = config.get("format_type", "unknown")
+    field_mappings = config.get("field_mappings", {})
+    
+    # Parse the line based on format type
+    source_fields = {}
+    
+    if format_type == "jsonl":
+        try:
+            source_fields = json.loads(line)
+        except json.JSONDecodeError:
+            source_fields = {}
+    
+    elif format_type == "csv":
+        try:
+            # For CSV, we need the header to know field names
+            # Since we don't have it here, treat fields as positional
+            row = next(csv.reader([line]))
+            # Try to match by common field names or use indices
+            for i, val in enumerate(row):
+                source_fields[f"field_{i}"] = val.strip()
+            # Also try key=value pairs within the line
+            source_fields.update(kv_pairs(line))
+        except Exception:
+            pass
+    
+    elif format_type == "kv":
+        source_fields = kv_pairs(line)
+    
+    elif format_type == "syslog":
+        # Basic syslog parsing
+        source_fields = {
+            "timestamp": line[:15] if len(line) > 15 else "",
+            "message": line[16:] if len(line) > 16 else line,
+        }
+        source_fields.update(kv_pairs(line))
+    
+    else:
+        # Try both JSON and key-value parsing
+        try:
+            source_fields = json.loads(line)
+        except json.JSONDecodeError:
+            source_fields = kv_pairs(line)
+    
+    # Apply field mappings
+    rec = {
+        "@ts": None,
+        "user": None,
+        "src_ip": None,
+        "dst_ip": None,
+        "action": None,
+        "status": None,
+        "resource": None,
+        "msg": None,
+    }
+    
+    for source_field, ecs_field in field_mappings.items():
+        if ecs_field in rec:
+            # Try exact match first
+            value = source_fields.get(source_field)
+            
+            # Try case-insensitive match
+            if value is None:
+                for k, v in source_fields.items():
+                    if k.lower() == source_field.lower():
+                        value = v
+                        break
+            
+            if value is not None:
+                rec[ecs_field] = str(value).strip() if value else None
+    
+    # Fallback extraction for common fields if not mapped
+    if rec["src_ip"] is None:
+        rec["src_ip"] = extract_first(IP_RE, line)
+    
+    if rec["user"] is None:
+        rec["user"] = extract_first(USER_RE, line)
+    
+    # Use line as message if nothing else
+    if rec["msg"] is None:
+        rec["msg"] = line.strip()[:500]
+    
+    return to_ecs_min(rec, line)

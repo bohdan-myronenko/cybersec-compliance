@@ -9,3 +9,5 @@ duckdb
 jinja2
 uvicorn[standard]
 fastapi
+redis
+python-multipart

@@ -2,6 +2,9 @@
 
 **Scope:** Access control (authentication, anomalous login attempts, privileged risks)  
 **Period:** {{ period }}
+{% if insights and insights.risk_level %}
+**Risk Level:** {{ insights.risk_level | upper }}
+{% endif %}
 
 ## Key Metrics
 
@@ -37,7 +40,67 @@
 _No exceptions reported._
 {% endif %}
 
-## Observations
+{% if insights and insights.findings %}
+## AI-Generated Insights
+
+{% if insights.summary %}
+{{ insights.summary }}
+{% endif %}
+
+### Security Findings
+
+{% for finding in insights.findings %}
+#### {{ finding.severity | upper }}: {{ finding.title }}
+
+{{ finding.description }}
+
+{% if finding.evidence %}
+**Evidence:**
+{% for key, value in finding.evidence.items() %}
+- {{ key }}: {{ value }}
+{% endfor %}
+{% endif %}
+
+{% if finding.compliance_impact %}
+**Compliance Impact:**
+{% for impact in finding.compliance_impact %}
+- **{{ impact.framework }}** ({{ impact.clause }}): {{ impact.description }}
+{% endfor %}
+{% endif %}
+
+**Recommendation:** {{ finding.recommendation }}
+
+---
+
+{% endfor %}
+
+{% if insights.positive_observations %}
+### Positive Observations
+{% for obs in insights.positive_observations %}
+- {{ obs }}
+{% endfor %}
+{% endif %}
+
+{% if insights.trend_analysis %}
+### Trend Analysis
+{% if insights.trend_analysis.improving %}
+**Improving:** {{ insights.trend_analysis.improving | join(", ") }}
+{% endif %}
+{% if insights.trend_analysis.degrading %}
+**Degrading:** {{ insights.trend_analysis.degrading | join(", ") }}
+{% endif %}
+{% if insights.trend_analysis.stable %}
+**Stable:** {{ insights.trend_analysis.stable | join(", ") }}
+{% endif %}
+{% endif %}
+
+{% elif insights_text %}
+## AI-Generated Insights
+
+{{ insights_text }}
+{% endif %}
+
+## Compliance Observations
 {{ observations }}
 
 ## Legal Context Provided
