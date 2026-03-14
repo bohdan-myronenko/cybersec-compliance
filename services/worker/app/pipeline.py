@@ -286,6 +286,7 @@ def build_windowed_metrics_for_dir(
     data_dir: Path, 
     window_days: int = 7,
     use_custom_formats: bool = True,
+    target_filenames: Optional[List[str]] = None,
 ) -> Dict[str, Dict]:
     """
     Stream over all log files in data_dir, group events into fixed-duration
@@ -296,6 +297,7 @@ def build_windowed_metrics_for_dir(
         data_dir: Directory containing log files
         window_days: Size of time windows in days
         use_custom_formats: If True, check Redis for custom format configs
+        target_filenames: If set, only process files whose name is in this list (e.g. current session upload)
 
     Returns:
         dict: {window_key: metrics_dict}
@@ -320,7 +322,14 @@ def build_windowed_metrics_for_dir(
 
     # First, scan for files
     update_progress("scan", "Discovering log files...")
-    files = [p for p in data_dir.rglob("*") if p.is_file()]
+    all_files = [p for p in data_dir.rglob("*") if p.is_file()]
+    if target_filenames:
+        target_set = set(target_filenames)
+        files = [p for p in all_files if p.name in target_set]
+        if not files:
+            update_progress("scan", f"Target file(s) {target_filenames} not found in {data_dir}")
+    else:
+        files = all_files
     update_progress("scan", f"Found {len(files)} file(s) to process")
 
     # Process each file

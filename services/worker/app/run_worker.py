@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Body
 from pydantic import BaseModel
 import uvicorn
 import traceback
@@ -91,16 +91,21 @@ def get_current_progress():
 
 
 @app.post("/run/access-control")
-def run_access_control():
+def run_access_control(payload: dict = Body(default={})):
     try:
         # Reset and start progress tracking
         reset_progress()
         update_progress("init", "Starting access control report generation...")
         
         window_days = int(os.getenv("WINDOW_DAYS", "7"))
+        target_filename = payload.get("filename")  # if set, only process this file (current session upload)
 
-        # Stream over all files, aggregate per time window
-        metrics_by_window = build_windowed_metrics_for_dir(DATA_DIR, window_days=window_days)
+        # Stream over all files (or only target file), aggregate per time window
+        metrics_by_window = build_windowed_metrics_for_dir(
+            DATA_DIR,
+            window_days=window_days,
+            target_filenames=[target_filename] if target_filename else None,
+        )
 
         if not metrics_by_window:
             update_progress("complete", f"No parsable files in {DATA_DIR.resolve()}", is_complete=True, is_error=True)

@@ -104,12 +104,15 @@ def get_data_files() -> list:
     return sorted(files, key=lambda x: x["modified"], reverse=True)
 
 
-def trigger_report_generation() -> dict:
-    """Trigger the access control report generation."""
+def trigger_report_generation(filename: str | None = None) -> dict:
+    """Trigger the access control report generation. If filename is provided, only that file is processed."""
     try:
+        payload = {}
+        if filename:
+            payload["filename"] = filename
         resp = requests.post(
             f"{API_URL}/generate/access-control",
-            json={},
+            json=payload,
             timeout=3600,
         )
         return resp.json()
@@ -651,14 +654,58 @@ def render_format_onboarding():
     
     # Show existing formats
     st.header("Registered Formats")
+    if "format_preview_id" not in st.session_state:
+        st.session_state.format_preview_id = None
     try:
         formats_resp = requests.get(f"{API_URL}/agent/formats", timeout=10)
         if formats_resp.status_code == 200:
             formats_data = formats_resp.json()
             formats_list = formats_data.get("formats", [])
             if formats_list:
-                df = pd.DataFrame(formats_list)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                for fmt in formats_list:
+                    fmt_id = fmt.get("format_id", "")
+                    fmt_name = fmt.get("format_name", "Unknown")
+                    fmt_type = fmt.get("format_type", "")
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    with col1:
+                        st.text(f"{fmt_name} ({fmt_id})")
+                    with col2:
+                        st.caption(fmt_type)
+                    with col3:
+                        if st.button("Preview", key=f"preview_{fmt_id}", type="secondary"):
+                            st.session_state.format_preview_id = fmt_id
+                            st.rerun()
+                if st.session_state.format_preview_id:
+                    preview_id = st.session_state.format_preview_id
+                    if st.button("Close preview", key="close_preview"):
+                        st.session_state.format_preview_id = None
+                        st.rerun()
+                    try:
+                        detail_resp = requests.get(f"{API_URL}/agent/formats/{preview_id}", timeout=10)
+                        if detail_resp.status_code == 200:
+                            config = detail_resp.json()
+                            st.subheader(f"Format: {config.get('format_name', preview_id)}")
+                            st.caption(f"Type: {config.get('format_type', '')} | Approved by: {config.get('_approved_by', '')} at {config.get('_approved_at', '')}")
+                            field_mappings = config.get("field_mappings") or {}
+                            if field_mappings:
+                                st.markdown("**Field Mappings**")
+                                st.dataframe(
+                                    pd.DataFrame([{"source": k, "ECS field": v} for k, v in field_mappings.items()]),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                            detection_rules = config.get("detection_rules") or {}
+                            if detection_rules:
+                                st.markdown("**Detection Rules**")
+                                st.json(detection_rules)
+                            unmapped = config.get("unmapped_fields") or []
+                            if unmapped:
+                                st.markdown("**Unmapped Fields**")
+                                st.write(", ".join(unmapped))
+                        else:
+                            st.warning("Could not load format details.")
+                    except Exception as e:
+                        st.warning(f"Error loading format: {e}")
             else:
                 st.info("No custom formats registered yet.")
         else:
@@ -1071,7 +1118,13 @@ def render_chat():
             result = chat_upload_logs(log_file)
             content_preview = log_file.getvalue().decode("utf-8", errors="ignore").splitlines()[:50]
             if result.get("ok"):
-                st.session_state.last_uploaded_log = {"name": log_file.name, "content_preview": content_preview}
+                st.session_state.last_uploaded_log = {
+                    "name": log_file.name,
+                    "content_preview": content_preview,
+                    "format_detected": result.get("format_detected"),
+                    "needs_onboard": result.get("needs_onboard", True),
+                    "custom_match": result.get("custom_match"),
+                }
                 st.session_state.chat_messages.append({
                     "role": "assistant",
                     "content": f"Log file **{result.get('filename', 'file')}** saved. "
@@ -1139,6 +1192,11 @@ def render_chat():
 
     # Chat history
     st.subheader("Conversation")
+    if st.button("Clear Chat", key="clear_chat_btn", help="Clear chat history and uploaded file pointers (does not delete files from data/)"):
+        st.session_state.chat_messages = []
+        st.session_state.last_uploaded_log = None
+        st.session_state.pending_onboard = None
+        st.rerun()
     for idx, msg in enumerate(st.session_state.chat_messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
@@ -1177,22 +1235,35 @@ def render_chat():
 
         # Command handling
         if text.lower().startswith("/generate"):
-            with st.spinner("Generating report..."):
-                gen_result = trigger_report_generation()
-                if gen_result.get("error"):
-                    st.session_state.chat_messages.append({
-                        "role": "assistant",
-                        "content": f"Report generation failed: {gen_result.get('error')}. {gen_result.get('detail', '')}",
-                        "sources": [],
-                    })
-                else:
-                    wins = gen_result.get("windows", [])
-                    st.session_state.chat_messages.append({
-                        "role": "assistant",
-                        "content": f"Generated {len(wins)} report(s). " + "; ".join(f"`{w.get('output', '')}`" for w in wins),
-                        "sources": [],
-                    })
+            last_log = st.session_state.get("last_uploaded_log")
+            if last_log and last_log.get("needs_onboard"):
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": "Report generation skipped: the uploaded log format is not onboarded. Use **/onboard** to add this format first, then **/generate**.",
+                    "sources": [],
+                })
                 st.rerun()
+            else:
+                format_info = ""
+                if last_log and last_log.get("format_detected"):
+                    format_info = f" Format detected: **{last_log.get('format_detected')}**. "
+                with st.spinner("Generating report..."):
+                    filename = last_log.get("name") if last_log else None
+                    gen_result = trigger_report_generation(filename=filename)
+                    if gen_result.get("error"):
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": f"Report generation failed: {gen_result.get('error')}. {gen_result.get('detail', '')}",
+                            "sources": [],
+                        })
+                    else:
+                        wins = gen_result.get("windows", [])
+                        st.session_state.chat_messages.append({
+                            "role": "assistant",
+                            "content": f"{format_info}Generated {len(wins)} report(s). " + "; ".join(f"`{w.get('output', '')}`" for w in wins),
+                            "sources": [],
+                        })
+                    st.rerun()
 
         elif text.lower().startswith("/onboard"):
             last_log = st.session_state.get("last_uploaded_log")
