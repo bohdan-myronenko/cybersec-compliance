@@ -465,7 +465,7 @@ def render_view_reports():
         return
     
     # Report Selection
-    col1, col2 = st.columns([3, 1])
+    col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
     
     with col1:
         selected_report = st.selectbox(
@@ -484,7 +484,7 @@ def render_view_reports():
         # Report metadata
         if report_path.exists():
             stat = report_path.stat()
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3 = st.columns([3, 3, 2], vertical_alignment="bottom")
             with col1:
                 st.metric("File Size", f"{stat.st_size / 1024:.1f} KB")
             with col2:
@@ -701,7 +701,30 @@ def render_format_onboarding():
                             unmapped = config.get("unmapped_fields") or []
                             if unmapped:
                                 st.markdown("**Unmapped Fields**")
-                                st.write(", ".join(unmapped))
+                                rows = []
+                                for field in unmapped:
+                                    if isinstance(field, dict):
+                                        rows.append(
+                                            {
+                                                "name": field.get("name", ""),
+                                                "sample_value": field.get("sample_value", ""),
+                                                "potential_use": field.get("potential_use", ""),
+                                            }
+                                        )
+                                    else:
+                                        rows.append(
+                                            {
+                                                "name": str(field),
+                                                "sample_value": "",
+                                                "potential_use": "",
+                                            }
+                                        )
+                                if rows:
+                                    st.dataframe(
+                                        pd.DataFrame(rows),
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
                         else:
                             st.warning("Could not load format details.")
                     except Exception as e:
