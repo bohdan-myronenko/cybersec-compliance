@@ -21,3 +21,23 @@ def get_generation_progress():
         return r.json()
     except requests.exceptions.RequestException as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/checkpoint")
+def get_checkpoint():
+    """Get checkpoint info from the worker."""
+    try:
+        r = requests.get(f"{WORKER_URL}/checkpoint", timeout=5)
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        return {"status": "error", "message": str(e)}
+
+
+@router.delete("/checkpoint")
+def delete_checkpoint():
+    """Clear the pipeline checkpoint."""
+    try:
+        r = requests.delete(f"{WORKER_URL}/checkpoint", timeout=5)
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        return {"ok": False, "error": str(e)}

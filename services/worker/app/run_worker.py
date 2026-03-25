@@ -9,6 +9,7 @@ import traceback
 
 from .pipeline import build_windowed_metrics_for_dir, generate_report, choose_chat
 from .progress import update_progress, get_progress, reset_progress
+from .checkpoint import save_checkpoint, load_checkpoint, clear_checkpoint, get_checkpoint_info
 from .config_store import get_config_store, FormatConfigStore
 from .agents import SchemaInferenceAgent, MetricSuggestionAgent, InsightGenerationAgent
 from .chat_handler import chat as chat_handler_chat, get_rag_engine
@@ -96,28 +97,51 @@ def run_access_control(payload: dict = Body(default={})):
         # Reset and start progress tracking
         reset_progress()
         update_progress("init", "Starting access control report generation...")
-        
+
         window_days = int(os.getenv("WINDOW_DAYS", "7"))
         target_filename = payload.get("filename")  # if set, only process this file (current session upload)
+        run_params = {"filename": target_filename, "window_days": window_days}
 
-        # Stream over all files (or only target file), aggregate per time window
-        metrics_by_window = build_windowed_metrics_for_dir(
-            DATA_DIR,
-            window_days=window_days,
-            target_filenames=[target_filename] if target_filename else None,
-        )
+        # ---------- Try to load checkpoint ----------
+        ckpt = load_checkpoint()
+        completed = []
+        stage_data: dict = {}
+        if ckpt and ckpt.get("params") == run_params:
+            completed = ckpt.get("completed_stages", [])
+            stage_data = ckpt.get("stage_data", {})
+            update_progress("init", f"Resuming from checkpoint (completed: {', '.join(completed)})")
+        else:
+            # Parameters changed – discard stale checkpoint
+            clear_checkpoint()
 
-        if not metrics_by_window:
-            update_progress("complete", f"No parsable files in {DATA_DIR.resolve()}", is_complete=True, is_error=True)
-            return {"error": f"No parsable files in {DATA_DIR.resolve()}"}
+        # ---------- Stage: scan + normalize + metrics ----------
+        if "metrics" in completed:
+            metrics_by_window = stage_data.get("metrics_by_window", {})
+            update_progress("metrics", f"Loaded {len(metrics_by_window)} window(s) from checkpoint")
+        else:
+            metrics_by_window = build_windowed_metrics_for_dir(
+                DATA_DIR,
+                window_days=window_days,
+                target_filenames=[target_filename] if target_filename else None,
+            )
+            if not metrics_by_window:
+                update_progress("complete", f"No parsable files in {DATA_DIR.resolve()}", is_complete=True, is_error=True)
+                return {"error": f"No parsable files in {DATA_DIR.resolve()}"}
 
-        outputs = []
+            completed = ["scan", "normalize", "metrics"]
+            stage_data["metrics_by_window"] = metrics_by_window
+            save_checkpoint(completed, stage_data, params=run_params)
+
+        # ---------- Stage: generate reports per window ----------
+        outputs: list = stage_data.get("reports", [])
+        done_windows = {o["window"] for o in outputs}
         total_windows = len(metrics_by_window)
-        
+
         for i, (window_key, metrics) in enumerate(metrics_by_window.items(), 1):
+            if window_key in done_windows:
+                continue  # already generated in a previous run
+
             window_info = f" (window {i}/{total_windows})" if total_windows > 1 else ""
-            
-            # window_key is ISO start-of-window or "unknown"
             period_label = (
                 f"{window_key} (window={window_days}d)" if window_key != "unknown"
                 else "Unknown period"
@@ -125,13 +149,24 @@ def run_access_control(payload: dict = Body(default={})):
 
             report_md = generate_report(metrics, period=period_label, window_info=window_info)
 
-            # Make filename safe for filesystem
             update_progress("save", f"Saving report for window: {window_key}")
             filename_safe = window_key.replace(":", "-") if window_key != "unknown" else "unknown"
             outpath = OUT_DIR / f"access_control_report_{filename_safe}.md"
             outpath.write_text(report_md, encoding="utf-8")
 
             outputs.append({"window": window_key, "output": str(outpath)})
+
+            # Checkpoint after each window so partial work is preserved
+            stage_data["reports"] = outputs
+            if "legal" not in completed:
+                completed.append("legal")
+            if "llm" not in completed:
+                completed.append("llm")
+            if "render" not in completed:
+                completed.append("render")
+            if "save" not in completed:
+                completed.append("save")
+            save_checkpoint(completed, stage_data, params=run_params)
 
         # Re-index reports so they're available for chat queries
         try:
@@ -141,13 +176,35 @@ def run_access_control(payload: dict = Body(default={})):
             pass  # Index update failed, but don't fail the whole request
 
         update_progress("complete", f"Successfully generated {len(outputs)} report(s)", is_complete=True)
+        clear_checkpoint()  # Success – no need to keep checkpoint
         return {"ok": True, "windows": outputs}
 
     except Exception:
         tb = traceback.format_exc()
         print(tb, flush=True)
         update_progress("complete", f"Error: {tb[:200]}", is_complete=True, is_error=True)
+        # Checkpoint is kept so the user can resume
         return {"error": "worker_exception", "traceback": tb}
+
+
+# -----------------------------------------------------------------------------
+# Checkpoint Endpoints
+# -----------------------------------------------------------------------------
+
+@app.get("/checkpoint")
+def get_checkpoint():
+    """Get checkpoint info (lightweight summary)."""
+    info = get_checkpoint_info()
+    if info is None:
+        return {"status": "none"}
+    return {"status": "exists", **info}
+
+
+@app.delete("/checkpoint")
+def delete_checkpoint():
+    """Clear the pipeline checkpoint."""
+    removed = clear_checkpoint()
+    return {"ok": True, "removed": removed}
 
 
 # -----------------------------------------------------------------------------

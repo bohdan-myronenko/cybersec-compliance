@@ -129,6 +129,24 @@ def get_generation_progress() -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def get_checkpoint_info() -> dict:
+    """Get checkpoint info from the API."""
+    try:
+        resp = requests.get(f"{API_URL}/generate/checkpoint", timeout=5)
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"status": "error", "message": str(e)}
+
+
+def api_clear_checkpoint() -> dict:
+    """Clear the pipeline checkpoint via the API."""
+    try:
+        resp = requests.delete(f"{API_URL}/generate/checkpoint", timeout=5)
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        return {"ok": False, "error": str(e)}
+
+
 # Stage icons for visual feedback
 STAGE_ICONS = {
     "init": "🚀",
@@ -137,6 +155,7 @@ STAGE_ICONS = {
     "metrics": "📊",
     "legal": "📚",
     "llm": "🤖",
+    "insights": "💡",
     "render": "📝",
     "save": "💾",
     "complete": "✅",
@@ -345,6 +364,28 @@ def render_generate_reports():
     # Generation Controls
     st.header("Generate Report")
     
+    # Checkpoint UI
+    ckpt = get_checkpoint_info()
+    has_checkpoint = ckpt.get("status") == "exists"
+    
+    if has_checkpoint:
+        last_stage = ckpt.get("last_stage", "unknown")
+        updated_at = ckpt.get("updated_at", "")
+        completed = ckpt.get("completed_stages", [])
+        st.warning(
+            f"📌 **Checkpoint found** — Last completed stage: **{last_stage}** "
+            f"({len(completed)} stage(s) done) — Saved at: {updated_at}"
+        )
+        col_resume, col_clear = st.columns(2)
+        with col_resume:
+            resume_clicked = st.button("▶️ Resume from Checkpoint", type="primary", use_container_width=True)
+        with col_clear:
+            if st.button("🗑️ Clear Checkpoint", use_container_width=True):
+                api_clear_checkpoint()
+                st.rerun()
+    else:
+        resume_clicked = False
+    
     st.info("""
     **What happens when you generate a report:**
     1. All log files in the data directory are processed
@@ -357,14 +398,16 @@ def render_generate_reports():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        if st.button("🚀 Generate Access Control Report", type="primary", use_container_width=True):
+        generate_clicked = st.button("🚀 Generate Access Control Report", type="primary", use_container_width=True)
+    
+    if generate_clicked or resume_clicked:
             # Create placeholders for progress UI
             progress_container = st.container()
             
             with progress_container:
                 status_placeholder = st.empty()
                 progress_bar = st.progress(0)
-                stage_placeholder = st.empty()
+                table_placeholder = st.empty()
                 detail_placeholder = st.empty()
                 
                 # Use ThreadPoolExecutor for async execution
@@ -372,8 +415,21 @@ def render_generate_reports():
                     # Start the generation in a background thread
                     future = executor.submit(trigger_report_generation)
                     
+                    # Stage display names
+                    STAGE_DISPLAY = [
+                        ("init", "Initialize"),
+                        ("scan", "Scan Files"),
+                        ("normalize", "Parse Logs"),
+                        ("metrics", "Compute Metrics"),
+                        ("legal", "Load Legal Texts"),
+                        ("llm", "Query LLM"),
+                        ("insights", "Generate Insights"),
+                        ("render", "Render Report"),
+                        ("save", "Save Output"),
+                        ("complete", "Complete"),
+                    ]
+                    
                     # Poll for progress while waiting
-                    last_stage = ""
                     while not future.done():
                         progress_data = get_generation_progress()
                         
@@ -384,47 +440,29 @@ def render_generate_reports():
                             total_stages = prog.get("total_stages", 9)
                             message = prog.get("message", "Processing...")
                             detail = prog.get("detail", "")
+                            stages_status = prog.get("stages_status", {})
                             
                             # Update progress bar
                             progress_pct = min(stage_num / total_stages, 0.99)
                             progress_bar.progress(progress_pct)
                             
-                            # Update stage display
+                            # Update heading
                             icon = STAGE_ICONS.get(stage, "⏳")
                             status_placeholder.markdown(f"### {icon} {message}")
                             
                             if detail:
                                 detail_placeholder.caption(f"_{detail}_")
                             
-                            # Show stage progression
-                            if stage != last_stage:
-                                last_stage = stage
-                                stages_display = []
-                                for s_key, s_msg in [
-                                    ("init", "Initialize"),
-                                    ("scan", "Scan Files"),
-                                    ("normalize", "Parse Logs"),
-                                    ("metrics", "Compute Metrics"),
-                                    ("legal", "Load Legal Texts"),
-                                    ("llm", "Query LLM"),
-                                    ("render", "Render Report"),
-                                    ("save", "Save Output"),
-                                ]:
-                                    s_icon = STAGE_ICONS.get(s_key, "⏳")
-                                    s_num, _ = next(((i+1, m) for i, (k, m) in enumerate([
-                                        ("init", ""), ("scan", ""), ("normalize", ""),
-                                        ("metrics", ""), ("legal", ""), ("llm", ""),
-                                        ("render", ""), ("save", ""), ("complete", "")
-                                    ]) if k == s_key), (0, ""))
-                                    
-                                    if s_num < stage_num:
-                                        stages_display.append(f"~~{s_icon} {s_msg}~~")
-                                    elif s_num == stage_num:
-                                        stages_display.append(f"**{s_icon} {s_msg}** ←")
-                                    else:
-                                        stages_display.append(f"{s_icon} {s_msg}")
-                                
-                                stage_placeholder.markdown(" → ".join(stages_display[:4]) + "\n\n" + " → ".join(stages_display[4:]))
+                            # Build progress table
+                            table_rows = []
+                            for s_key, s_name in STAGE_DISPLAY:
+                                s_icon = STAGE_ICONS.get(s_key, "⏳")
+                                s_status = stages_status.get(s_key, "Pending")
+                                table_rows.append({
+                                    "Stage": f"{s_icon} {s_name}",
+                                    "Status": s_status,
+                                })
+                            table_placeholder.table(pd.DataFrame(table_rows))
                         
                         time.sleep(0.5)
                     
@@ -437,7 +475,7 @@ def render_generate_reports():
                 if "error" in result:
                     status_placeholder.error(f"❌ Error: {result.get('error')}")
                     detail_placeholder.empty()
-                    stage_placeholder.empty()
+                    table_placeholder.empty()
                     if "detail" in result:
                         st.code(result["detail"])
                     if "traceback" in result:
@@ -446,7 +484,7 @@ def render_generate_reports():
                 else:
                     status_placeholder.success("✅ Report generated successfully!")
                     detail_placeholder.empty()
-                    stage_placeholder.empty()
+                    table_placeholder.empty()
                     if "windows" in result:
                         st.write(f"Generated {len(result['windows'])} report(s):")
                         for window in result["windows"]:
