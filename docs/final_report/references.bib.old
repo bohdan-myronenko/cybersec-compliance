@@ -1,0 +1,218 @@
+@misc{NIS2Directive2023,
+  title        = {Directive (EU) 2022/2555 of the European Parliament and of the Council of 14 December 2022 on measures for a high common level of cybersecurity across the Union (NIS2 Directive)},
+  author       = {European Union (EU)},
+  year         = {2022},
+  url          = {https://eur-lex.europa.eu/eli/dir/2022/2555/oj},
+  note         = {Accessed: 2026-03-10}
+}
+
+@misc{NIST80092,
+  author       = {Scarfone, Karen and Souppaya, Murugiah},
+  title        = {Guide to Computer Security Log Management},
+  publisher    = {National Institute of Standards and Technology},
+  year         = {2006},
+  doi          = {10.6028/NIST.SP.800-92},
+  url          = {https://nvlpubs.nist.gov/nistpubs/legacy/sp/nistspecialpublication800-92.pdf},
+  note         = {NIST Special Publication 800-92. Accessed: 03-10-2026}
+}
+
+@article{Bagui2023UWFZeekData22,
+  author       = {Bagui, Sikha S. and Mink, Dustin and Bagui, Subhash C. and Ghosh, Tirthankar and Plenkers, Russel and McElroy, Tom and Dulaney, Stephan and Shabanali, Sajida},
+  title        = {Introducing {UWF}-{ZeekData22}: A Comprehensive Network Traffic Dataset Based on the {MITRE} {ATT\&CK} Framework},
+  journal      = {Data},
+  volume       = {8},
+  number       = {1},
+  pages        = {18},
+  year         = {2023},
+  doi          = {10.3390/data8010018},
+  url          = {https://www.mdpi.com/2306-5729/8/1/18},
+  note         = {Accessed: 2026-03-10}
+}
+
+@misc{ElasticECS,
+  title        = {Elastic Common Schema (ECS) Reference},
+  author       = {{Elasticsearch B.V.}},
+  year         = {2026},
+  url          = {https://www.elastic.co/docs/reference/ecs},
+  note         = {ECS documentation (e.g., @timestamp requirement). Accessed: 03-10-2026}
+}
+
+
+
+@misc{CyberResilienceAct2024,
+  title        = {Regulation (EU) 2024/2847 of the European Parliament and of the Council on horizontal cybersecurity requirements for products with digital elements (Cyber Resilience Act)},
+  author       = {European Union (EU)},
+  year         = {2024},
+  url          = {https://eur-lex.europa.eu/eli/reg/2024/2847},
+  note         = {Accessed: 01-12-2025}
+}
+
+
+@misc{AIAct2024,
+  title        = {Regulation (EU) 2024/1689 of the European Parliament and of the Council laying down harmonised rules on artificial intelligence (Artificial Intelligence Act)},
+  author       = {European Union (EU)},
+  year         = {2024},
+  url          = {https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng},
+  note         = {Accessed: 03-10-2026}
+}
+
+@misc{GDPR2016,
+  title        = {General Data Protection Regulation (GDPR)},
+  author       = {European Union (EU)},
+  year         = {2016},
+  url          = {https://gdpr.eu/},
+  note         = {Accessed: 01-12-2025}
+}
+
+@article{Beretas2024NIS2AI,
+  author       = {Beretas, Christos P. and Davalas, Athanasios},
+  title        = {Bridging AI Innovation and Cybersecurity: Generative AI's Contribution to NIS2 Compliance},
+  journal      = {International Journal of Regional Development},
+  volume       = {11},
+  number       = {2},
+  pages        = {40--61},
+  year         = {2024},
+  publisher    = {Macrothink Institute},
+  doi          = {10.5296/ijrd.v11i2.22486},
+  url          = {https://doi.org/10.5296/ijrd.v11i2.22486},
+  note         = {Accessed: 01-12-2025}
+}
+
+
+@misc{MicrosoftSecurityCopilot2024,
+  title        = {Microsoft Security Copilot Documentation},
+  author       = {{Microsoft Corp.}},
+  year         = {2024},
+  url          = {https://learn.microsoft.com/en-us/copilot/security/microsoft-security-copilot},
+  note         = {Accessed: 01-12-2025}
+}
+
+@misc{TrackforceReportPro2025,
+  title        = {ReportPro AI: Automated Incident Reporting},
+  author       = {{Trackforce Valiant}},
+  year         = {2025},
+  url          = {https://www.trackforce.com/reportpro-ai/},
+  note         = {Accessed: 01-12-2025}
+}
+
+@inproceedings{Zhu2023Loghub,
+  author       = {Zhu, Jieming and He, Shilin and He, Pinjia and Liu, Jinyang and Lyu, Michael R.},
+  title        = {Loghub: A Large Collection of System Log Datasets for {AI}-driven Log Analytics},
+  booktitle    = {Proceedings of the 2023 IEEE International Symposium on Software Reliability Engineering (ISSRE)},
+  pages        = {355--366},
+  year         = {2023},
+  doi          = {10.1109/ISSRE59848.2023.00071},
+  note         = {Accessed: 03-10-2026}
+}
+
+@inproceedings{Jiang2024Loghub20,
+  author       = {Jiang, Zhihan and Liu, Jinyang and Huang, Junjie and Li, Yichen and Huo, Yintong and Gu, Jiazhen and Chen, Zhuangbin and Zhu, Jieming and Lyu, Michael R.},
+  title        = {A Large-Scale Evaluation for Log Parsing Techniques: How Far Are We?},
+  booktitle    = {Proceedings of the 33rd ACM SIGSOFT International Symposium on Software Testing and Analysis (ISSTA '24)},
+  year         = {2024},
+  doi          = {10.1145/3650212.3652123},
+  note         = {Accessed: 03-10-2026}
+}
+
+
+@misc{KaggleRBA2023,
+  title        = {Risk-Based Authentication Dataset},
+  author       = {{Kaggle Community}},
+  year         = {2023},
+  url          = {https://www.kaggle.com/datasets/dasgroup/rba-dataset},
+  note         = {Accessed: 01-12-2025}
+}
+
+@misc{UWFZeekData2022,
+  title        = {UWF-ZeekData22: Annotated Network Traffic Dataset},
+  author       = {University of West Florida Cybersecurity Research Team},
+  year         = {2022},
+  url          = {https://datasets.uwf.edu/},
+  note         = {Accessed: 01-12-2025}
+}
+
+@inproceedings{RAG2020,
+  author       = {Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni, Fabio and Karpukhin, Vladimir and Goyal, Naman and K{\"u}ttler, Heinrich and Lewis, Mike and Yih, Wen{-}tau and Rockt{\"a}schel, Tim and Riedel, Sebastian and Kiela, Douwe},
+  title        = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
+  booktitle    = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year         = {2020},
+  url          = {https://arxiv.org/abs/2005.11401},
+  note         = {Accessed: 03-10-2026}
+}
+
+@article{LoRA2021,
+  author       = {Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen{-}Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+  title        = {Lo{RA}: Low-Rank Adaptation of Large Language Models},
+  journal      = {arXiv preprint arXiv:2106.09685},
+  year         = {2021},
+  url          = {https://arxiv.org/abs/2106.09685},
+  note         = {Accessed: 03-10-2026}
+}
+
+@article{Beck2025LLMLogParsing,
+  author       = {Beck, Viktor and Landauer, Max and Wurzenberger, Markus and Skopik, Florian and Rauber, Andreas},
+  title        = {SoK: LLM-based Log Parsing},
+  journal      = {arXiv preprint arXiv:2504.04877},
+  year         = {2025},
+  url          = {https://arxiv.org/abs/2504.04877},
+  note         = {Accessed: 2026-03-10}
+}
+
+@inproceedings{SFT2022,
+  author    = {Scialom, Thomas and Chakrabarty, Tuhin and Muresan, Smaranda},
+  title     = {Fine-tuned Language Models are Continual Learners},
+  booktitle = {Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing},
+  year      = {2022},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2022.emnlp-main.410/},
+  doi       = {10.18653/v1/2022.emnlp-main.410}
+}
+
+@misc{ISO27001A9,
+  title        = {ISO/IEC 27001:2022 Annex A.9: Access Control},
+  author       = {{International Organization for Standardization}},
+  year         = {2022},
+  url          = {https://www.iso.org/standard/27001},
+  note         = {Accessed: 01-12-2025}
+}
+
+@article{Nussbaum2024NomicEmbed,
+  author       = {Nussbaum, Zach and Morris, John X. and Duderstadt, Brandon and Mulyar, Andriy},
+  title        = {Nomic Embed: Training a Reproducible Long Context Text Embedder},
+  journal      = {arXiv preprint arXiv:2402.01613},
+  year         = {2024},
+  url          = {https://arxiv.org/abs/2402.01613},
+  note         = {Accessed: 2026-03-10}
+}
+
+@inproceedings{arawjo2024chainforge,
+  title={ChainForge: A Visual Toolkit for Prompt Engineering and LLM Hypothesis Testing},
+  author={Arawjo, Ian and Swoopes, Chelse and Vaithilingam, Priyan and Wattenberg, Martin and Glassman, Elena L},
+  booktitle={Proceedings of the CHI Conference on Human Factors in Computing Systems},
+  pages={1--18},
+  year={2024}
+}
+
+@inproceedings{ZhengMTBench2023,
+  author    = {Zheng, Lianmin and Chiang, Wei-Lin and Sheng, Ying and Zhuang, Siyuan and Wu, Zhanghao and Zhuang, Yonghao and Lin, Zi and Li, Zhuohan and Li, Dacheng and Xing, Eric P. and Zhang, Hao and Gonzalez, Joseph E. and Stoica, Ion},
+  title     = {Judging {LLM}-as-a-Judge with {MT-Bench} and Chatbot Arena},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023},
+  url       = {https://arxiv.org/abs/2306.05685}
+}
+
+@inproceedings{LeMAJ2025,
+  author    = {Enguehard, Joseph and Hou, Dew and Gillis, Sean},
+  title     = {{LeMAJ}: Legal {LLM}-as-a-Judge},
+  booktitle = {Proceedings of the Natural Legal Language Processing Workshop (NLLP) at EMNLP},
+  year      = {2025},
+  url       = {https://aclanthology.org/2025.nllp-1.23.pdf}
+}
+
+@article{Verga2024PoLL,
+  author    = {Verga, Pat and Hofstätter, Sebastian and Althammer, Sophia and Su, Yixuan and Gupta, Aleksandra and Dibia, Victor and Potts, Lucas},
+  title     = {Replacing Judges with Juries: Evaluating {LLM} Generations with a Panel of Diverse Models},
+  journal   = {arXiv preprint arXiv:2404.18796},
+  year      = {2024},
+  url       = {https://arxiv.org/abs/2404.18796}
+}
