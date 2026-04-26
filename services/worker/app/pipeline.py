@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import datetime as dt
 from collections import Counter
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from . import config
 from .progress import update_progress
 from .config_store import get_config_store, FormatConfigStore
 from .agents import InsightGenerationAgent
+from .eval_logger import create_eval_entry, record_llm_call, validate_insight_schema, save_eval_log
 
 ANSWER_PROMPT = """Question:
 Generate a concise access-control compliance section using the METRICS JSON and LEGAL TEXTS below.
@@ -462,6 +464,17 @@ def generate_report(
     Returns:
         Markdown-formatted compliance report
     """
+    pipeline_start = time.time()
+
+    # ---- Eval log entry ----
+    eval_entry = create_eval_entry(
+        provider=config.API_MODE,
+        model=config.LLM_MODEL if config.API_MODE != "EXTERNAL" else config.API_MODEL,
+        period=period,
+        metrics_input=metrics,
+        framework=framework,
+    )
+
     update_progress("legal", f"Loading legal compliance texts{window_info}...")
     legal_text, refs = load_legal()
     update_progress("legal", f"Loaded {len(refs)} relevant legal reference(s)")
@@ -471,9 +484,25 @@ def generate_report(
         legal_text=legal_text,
     )
     
+    # ---- Compliance LLM call (timed) ----
     update_progress("llm", f"Querying LLM for compliance analysis{window_info}...")
     client = choose_chat()
-    prose = client.chat(config.SYSTEM_PROMPT, prompt)
+    compliance_start = time.time()
+    compliance_error = None
+    try:
+        prose = client.chat(config.SYSTEM_PROMPT, prompt)
+    except Exception as e:
+        compliance_error = str(e)
+        prose = f"_LLM compliance call failed: {e}_"
+    compliance_latency = time.time() - compliance_start
+
+    eval_entry["compliance_call"] = record_llm_call(
+        prompt=prompt,
+        response=prose,
+        latency_seconds=compliance_latency,
+        success=compliance_error is None,
+        error=compliance_error,
+    )
     update_progress("llm", "LLM analysis complete")
     
     # Generate AI insights if enabled
@@ -481,13 +510,13 @@ def generate_report(
     insights_text = ""
     if generate_insights:
         update_progress("insights", f"Generating AI insights{window_info}...")
+        insight_start = time.time()
         try:
             # Try to load historical baselines for comparison
             baseline = []
             try:
                 config_store = get_config_store()
                 if config_store.ping():
-                    # Get baselines for a generic format (we don't know which format was used)
                     baseline = config_store.get_recent_baselines("default", count=3)
             except Exception:
                 pass  # No baselines available
@@ -514,6 +543,34 @@ def generate_report(
             update_progress("insights", f"Insight generation failed: {e}")
             insights_text = f"_Insight generation encountered an error: {e}_"
 
+        insight_latency = time.time() - insight_start
+
+        # ---- Record insight eval data ----
+        insight_eval = insights.get("_eval", {}) if insights else {}
+        insight_raw = insights.get("raw_response", "") if insights else ""
+        insight_prompt = insight_eval.get("prompt_text", "")
+
+        eval_entry["insight_call"] = record_llm_call(
+            prompt=insight_prompt,
+            response=insight_raw,
+            latency_seconds=insight_latency,
+            success="error" not in (insights or {}),
+            error=(insights or {}).get("error"),
+        )
+        eval_entry["insight_call"]["eval_metadata"] = insight_eval
+
+        # Schema validation on raw LLM output (before heuristic enhancement)
+        if insights and "error" not in insights:
+            raw_parsed = insight_eval.get("raw_parsed_json")
+            eval_entry["insight_call"]["schema_validation"] = validate_insight_schema(
+                raw_parsed if raw_parsed else insights
+            )
+        else:
+            eval_entry["insight_call"]["schema_validation"] = {
+                "overall_conformance": 0.0,
+                "error": "Insights not available or parsing failed",
+            }
+
     update_progress("render", f"Rendering compliance report{window_info}...")
     tpl_path = Path(__file__).parent / "templates" / "access_control_report.md.j2"
     tpl = Template(tpl_path.read_text(encoding="utf-8"))
@@ -525,4 +582,13 @@ def generate_report(
         insights=insights,
         insights_text=insights_text,
     )
+
+    # ---- Save evaluation log ----
+    eval_entry["report_length_chars"] = len(md)
+    eval_entry["total_pipeline_seconds"] = round(time.time() - pipeline_start, 3)
+    try:
+        save_eval_log(eval_entry)
+    except Exception:
+        pass  # Eval logging must never break the pipeline
+
     return md

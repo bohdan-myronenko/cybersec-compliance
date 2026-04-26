@@ -56,7 +56,10 @@ class InsightGenerationAgent:
                 - positive_observations: Things going well
                 - trend_analysis: Improving/degrading/stable metrics
                 - raw_response: Original LLM response
+                - _eval: Evaluation metadata for research comparison
         """
+        import time
+
         # Format baseline for prompt
         baseline_text = self._format_baseline(baseline)
         
@@ -68,17 +71,66 @@ class InsightGenerationAgent:
             period=period,
         )
         
+        # ---- LLM call with timing ----
+        llm_start = time.time()
+        llm_error = None
+        response = ""
         try:
             response = self.chat_client.chat(INSIGHT_AGENT_SYSTEM_PROMPT, prompt)
         except Exception as e:
-            return self._error_response(f"LLM call failed: {str(e)}")
-        
+            llm_error = str(e)
+            result = self._error_response(f"LLM call failed: {str(e)}")
+            result["raw_response"] = ""
+            result["_eval"] = {
+                "llm_latency_seconds": round(time.time() - llm_start, 3),
+                "llm_success": False,
+                "llm_error": llm_error,
+                "json_extract_success": False,
+                "json_parse_success": False,
+                "raw_parsed_json": None,
+                "llm_findings_count": 0,
+                "heuristic_findings_added": 0,
+                "total_findings_count": 0,
+                "prompt_text": prompt,
+            }
+            return result
+        llm_latency = time.time() - llm_start
+
+        # ---- Track JSON extraction/parsing ----
+        json_found = bool(re.search(r'\{[\s\S]*\}', response))
+        raw_parsed = None
+        json_parse_ok = False
+        if json_found:
+            try:
+                raw_parsed = json.loads(re.search(r'\{[\s\S]*\}', response).group())
+                json_parse_ok = True
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
         # Parse and validate response
         result = self._parse_response(response)
         result["raw_response"] = response
+
+        llm_findings_count = len(result.get("findings", []))
         
         # Add heuristic-based insights if LLM response is incomplete
         result = self._enhance_with_heuristics(result, metrics, baseline)
+
+        total_findings = len(result.get("findings", []))
+
+        # ---- Store eval metadata ----
+        result["_eval"] = {
+            "llm_latency_seconds": round(llm_latency, 3),
+            "llm_success": True,
+            "llm_error": None,
+            "json_extract_success": json_found,
+            "json_parse_success": json_parse_ok,
+            "raw_parsed_json": raw_parsed,
+            "llm_findings_count": llm_findings_count,
+            "heuristic_findings_added": total_findings - llm_findings_count,
+            "total_findings_count": total_findings,
+            "prompt_text": prompt,
+        }
         
         return result
     
