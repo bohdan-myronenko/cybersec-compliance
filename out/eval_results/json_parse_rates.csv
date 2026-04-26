@@ -1,0 +1,4 @@
+provider,model,total_runs,json_extract_success,json_parse_success,llm_success,extract_rate,parse_rate,llm_call_success_rate
+EXTERNAL,Qwen/Qwen3-32B-TEE,35,35,35,35,100.0,100.0,100.0
+EXTERNAL,gpt-5.4-nano,35,35,35,35,100.0,100.0,100.0
+LOCAL,llama3.1:8b,35,35,32,35,100.0,91.4,100.0

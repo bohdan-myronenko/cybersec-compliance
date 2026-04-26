@@ -1,0 +1,13 @@
+metric,provider,model,n,mean,std,median,min,max
+Compliance Call (s),EXTERNAL,Qwen/Qwen3-32B-TEE,35,23.43,5.75,22.37,15.64,39.07
+Compliance Call (s),EXTERNAL,gpt-5.4-nano,35,2.77,0.36,2.76,2.25,3.91
+Compliance Call (s),LOCAL,llama3.1:8b,35,17.67,5.37,17.15,8.73,37.62
+Insight LLM Call (s),EXTERNAL,Qwen/Qwen3-32B-TEE,35,48.09,8.66,46.93,31.39,76.83
+Insight LLM Call (s),EXTERNAL,gpt-5.4-nano,35,14.4,1.95,14.21,10.98,18.35
+Insight LLM Call (s),LOCAL,llama3.1:8b,35,83.89,18.66,79.93,61.49,163.3
+Insight Total (s),EXTERNAL,Qwen/Qwen3-32B-TEE,35,48.1,8.66,46.94,31.39,76.84
+Insight Total (s),EXTERNAL,gpt-5.4-nano,35,14.41,1.95,14.22,10.99,18.36
+Insight Total (s),LOCAL,llama3.1:8b,35,83.9,18.66,79.94,61.5,163.31
+Full Pipeline (s),EXTERNAL,Qwen/Qwen3-32B-TEE,35,71.56,10.41,70.67,56.29,97.35
+Full Pipeline (s),EXTERNAL,gpt-5.4-nano,35,17.22,1.84,17.07,14.6,20.77
+Full Pipeline (s),LOCAL,llama3.1:8b,35,101.61,18.96,97.06,78.57,178.16

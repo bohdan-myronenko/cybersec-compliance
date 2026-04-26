@@ -1,0 +1,4 @@
+Provider,Model,Runs,JSON Parse Rate (%),Schema Conformance (%),Severity Valid (%),Mean Latency (s),Mean LLM Findings,Mean Heuristic Findings,Mean Tokens/Run,Mean Report Len
+EXTERNAL,Qwen/Qwen3-32B-TEE,35,100.0,100.0,100.0,71.6,3.0,1.9,5073.0,7613.0
+EXTERNAL,gpt-5.4-nano,35,100.0,100.0,100.0,17.2,4.3,1.9,5218.0,10190.0
+LOCAL,llama3.1:8b,35,91.4,91.4,100.0,101.6,2.8,1.9,3793.0,4513.0
