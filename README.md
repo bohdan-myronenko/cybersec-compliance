@@ -49,8 +49,8 @@ The pipeline is deliberately split: deterministic ETL handles all numeric work, 
 ### Running the system
 
 ```bash
-git clone <repository-url>
-cd <repository-name>
+git clone https://csgitlab.ucd.ie/22209140/cybersec-compliance.git
+cd cybersec-compliance
 
 # Copy and edit environment configuration
 cp removemyname.env .env
