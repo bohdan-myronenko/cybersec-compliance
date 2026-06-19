@@ -126,7 +126,3 @@ Key sources informing this work:
 - Zheng et al. (2023), *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena*
 
 Full bibliography is in the project thesis.
-
-## License
-
-This project was developed as part of a BSc. Final Year Project at UCD. License terms to be confirmed with the supervisor before any redistribution.
