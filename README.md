@@ -4,8 +4,10 @@ Final Year Project, BSc. (Hons.) Computer Science, University College Dublin.
 
 A prototype system that ingests authentication and network telemetry, computes deterministic compliance metrics, and uses Retrieval-Augmented Generation (RAG) to produce draft cybersecurity compliance reports aligned with the EU NIS2 Directive (Article 21, Access Control) and ISO/IEC 27001 control A.9.
 
-**Author:** Bohdan Myronenko (22209140)
+**Author:** Bohdan Myronenko
+
 **Supervisor:** Dr. Shen Wang
+
 **Institution:** UCD School of Computer Science
 
 ---
@@ -49,7 +51,7 @@ The pipeline is deliberately split: deterministic ETL handles all numeric work, 
 ### Running the system
 
 ```bash
-git clone https://csgitlab.ucd.ie/22209140/cybersec-compliance.git
+git clone git@github.com:bohdan-myronenko/cybersec-compliance.git
 cd cybersec-compliance
 
 # Copy and edit environment configuration
